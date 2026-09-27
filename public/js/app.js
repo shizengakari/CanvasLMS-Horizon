@@ -118,7 +118,7 @@ const utils = {
 
   extractYouTubeVideoId(url) {
     if (!url) return null;
-    const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
+    const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
     const match = String(url).match(regExp);
     return match && match[1] ? match[1] : null;
   },
@@ -2196,9 +2196,35 @@ function renderGroupedMaterials(modules) {
     const group = document.createElement('div');
     group.className = 'module-group';
 
-    const fileItems = m.items.filter(it => it.type === 'File');
-    const ytItems = m.items.filter(it => it.type === 'ExternalUrl' && utils.extractYouTubeVideoId(it.url || it.htmlUrl));
-    const savableItems = [...fileItems, ...ytItems];
+    const fileItems = [];
+    const videoItems = [];
+
+    m.items.forEach(it => {
+      const extUrl = it.externalUrl || it.url || it.htmlUrl;
+      const ytId = utils.extractYouTubeVideoId(extUrl);
+      if (it.type === 'File') {
+        fileItems.push({
+          id: it.id,
+          name: it.displayName || it.title,
+          url: it.url,
+          courseId: it.courseId || state.materialsCourseId
+        });
+      } else if (ytId) {
+        videoItems.push({
+          url: extUrl,
+          title: it.displayName || it.title
+        });
+      } else if (it.type === 'ExternalUrl' && /\.(pdf|zip|docx?|pptx?|xlsx?|mp4|mov|mkv|webm)$/i.test(extUrl || '')) {
+        fileItems.push({
+          id: it.id || null,
+          name: it.displayName || it.title,
+          url: extUrl,
+          courseId: it.courseId || state.materialsCourseId
+        });
+      }
+    });
+
+    const totalSavable = fileItems.length + videoItems.length;
 
     group.innerHTML = `
       <div class="module-group-header">
@@ -2207,10 +2233,10 @@ function renderGroupedMaterials(modules) {
           <span>${m.name}</span>
           <span class="module-items-badge">${m.items.length}件</span>
         </div>
-        ${savableItems.length > 0 ? `
+        ${totalSavable > 0 ? `
           <button class="action-chip-btn btn-zip-module" style="font-weight: 700; color: #38bdf8; border-color: rgba(56, 189, 248, 0.35);" title="この回のファイル・動画をすべて保存します">
             <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-            この回の資料を保存 (${savableItems.length}件)
+            この回の資料を保存 (${totalSavable}件)
           </button>
         ` : ''}
       </div>
@@ -2225,7 +2251,7 @@ function renderGroupedMaterials(modules) {
       group.classList.toggle('collapsed');
     });
 
-    if (savableItems.length > 0) {
+    if (totalSavable > 0) {
       const zipBtn = group.querySelector('.btn-zip-module');
       zipBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -2239,17 +2265,11 @@ function renderGroupedMaterials(modules) {
           const promises = [];
           // 通常ファイルは一括ダウンロード
           if (fileItems.length > 0) {
-            promises.push(downloadFilesToFolder(fileItems.map(f => ({
-              id: f.id,
-              name: f.displayName || f.title,
-              url: f.url,
-              courseId: f.courseId || state.materialsCourseId
-            })), `${m.name} 資料`, m.name));
+            promises.push(downloadFilesToFolder(fileItems, `${m.name} 資料`, m.name));
           }
-          // YouTube動画は個別にジョブとしてキュー
-          ytItems.forEach(it => {
-            const title = it.displayName || it.title;
-            promises.push(downloadYouTubeVideo(it.url || it.htmlUrl, title));
+          // YouTube動画・映像は個別にジョブとしてキュー
+          videoItems.forEach(v => {
+            promises.push(downloadYouTubeVideo(v.url, v.title));
           });
           await Promise.all(promises);
         } finally {
@@ -2275,7 +2295,8 @@ function renderGroupedMaterials(modules) {
       const card = document.createElement('div');
       card.className = 'module-file-card';
 
-      const ytId = isExternal ? utils.extractYouTubeVideoId(it.url || it.htmlUrl) : null;
+      const extUrl = it.externalUrl || it.url || it.htmlUrl;
+      const ytId = isExternal ? utils.extractYouTubeVideoId(extUrl) : null;
 
       // アイコンの選定
       let iconHtml = '';
@@ -2453,7 +2474,7 @@ function renderGroupedMaterials(modules) {
         if (ytDlTrigger) {
           e.stopPropagation();
           e.preventDefault();
-          downloadYouTubeVideo(it.url || it.htmlUrl, title);
+          downloadYouTubeVideo(it.externalUrl || it.url || it.htmlUrl, title);
           return;
         }
 
@@ -2468,7 +2489,7 @@ function renderGroupedMaterials(modules) {
         }
 
         if (ytId) {
-          openYouTubeModal(ytId, title, it.url || it.htmlUrl);
+          openYouTubeModal(ytId, title, it.externalUrl || it.url || it.htmlUrl);
           return;
         }
 
@@ -2591,9 +2612,11 @@ document.getElementById('page-modal').addEventListener('click', (e) => {
 document.getElementById('btn-download-all-zip').addEventListener('click', async (e) => {
   const btn = e.currentTarget;
   const allFiles = [];
-  const allYtItems = [];
+  const allVideos = [];
   state.groupedMaterials.forEach(m => {
     m.items.forEach(it => {
+      const extUrl = it.externalUrl || it.url || it.htmlUrl;
+      const ytId = utils.extractYouTubeVideoId(extUrl);
       if (it.type === 'File' && it.id) {
         allFiles.push({
           id: it.id,
@@ -2601,16 +2624,23 @@ document.getElementById('btn-download-all-zip').addEventListener('click', async 
           url: it.url,
           courseId: it.courseId || state.materialsCourseId
         });
-      } else if (it.type === 'ExternalUrl') {
-        const ytId = utils.extractYouTubeVideoId(it.url || it.htmlUrl);
-        if (ytId) {
-          allYtItems.push(it);
-        }
+      } else if (ytId) {
+        allVideos.push({
+          url: extUrl,
+          title: it.displayName || it.title
+        });
+      } else if (it.type === 'ExternalUrl' && /\.(pdf|zip|docx?|pptx?|xlsx?|mp4|mov|mkv|webm)$/i.test(extUrl || '')) {
+        allFiles.push({
+          id: it.id || null,
+          name: it.displayName || it.title,
+          url: extUrl,
+          courseId: it.courseId || state.materialsCourseId
+        });
       }
     });
   });
 
-  if (allFiles.length === 0 && allYtItems.length === 0) return;
+  if (allFiles.length === 0 && allVideos.length === 0) return;
 
   const courseSelect = document.getElementById('material-course-select');
   const courseName = courseSelect.options[courseSelect.selectedIndex]?.text || '講義資料';
@@ -2626,8 +2656,8 @@ document.getElementById('btn-download-all-zip').addEventListener('click', async 
     if (allFiles.length > 0) {
       promises.push(downloadFilesToFolder(allFiles, `${courseName} 全講義資料`, courseName));
     }
-    allYtItems.forEach(it => {
-      promises.push(downloadYouTubeVideo(it.url || it.htmlUrl, it.displayName || it.title));
+    allVideos.forEach(v => {
+      promises.push(downloadYouTubeVideo(v.url, v.title));
     });
     await Promise.all(promises);
   } finally {

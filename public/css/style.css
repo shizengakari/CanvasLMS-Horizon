@@ -164,10 +164,21 @@
   --shadow-inner: inset 0 1px 0 rgba(255, 255, 255, 0.95);
 }
 
-/* ライトテーマ：お知らせ日付バッジの視認性確保 */
+/* ライトテーマ：お知らせ日付バッジ・投稿者バッジの視認性確保 */
 [data-theme="light"] .announcement-time-badge {
-  color: #3c4043;
-  background: rgba(60, 64, 67, 0.08);
+  color: #1e293b;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  font-weight: 600;
+}
+
+[data-theme="light"] .announcement-time-badge svg {
+  color: #475569;
+}
+
+[data-theme="light"] .announcement-author-badge {
+  color: #334155;
+  font-weight: 500;
 }
 
 /* ==========================================================================

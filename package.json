@@ -37,7 +37,8 @@
           ]
         }
       ],
-      "icon": "app.ico"
+      "icon": "app.ico",
+      "artifactName": "Canvas-Horizon-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": true,
@@ -45,7 +46,8 @@
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Canvas Horizon"
+      "shortcutName": "Canvas Horizon",
+      "artifactName": "Canvas-Horizon-Setup-${version}.${ext}"
     },
     "publish": [
       {

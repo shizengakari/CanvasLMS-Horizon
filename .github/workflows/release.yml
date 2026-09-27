@@ -2,6 +2,8 @@ name: Release Canvas Horizon
 
 on:
   push:
+    branches:
+      - master
     tags:
       - 'v*'
   workflow_dispatch:
@@ -16,6 +18,9 @@ jobs:
     steps:
       - name: リポジトリのチェックアウト
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Node.js のセットアップ
         uses: actions/setup-node@v4
@@ -26,25 +31,27 @@ jobs:
       - name: 依存関係のインストール
         run: npm ci
 
+      - name: バージョンとタグの自動判定・自動アップデート
+        id: versioning
+        run: node scripts/prepare-release.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Windows アプリのビルド
         run: npx electron-builder --win --publish never
 
-      - name: GitHub Releases へ一括公開
-        shell: pwsh
-        run: |
-          $exeLocal      = (Get-ChildItem dist -Filter "Canvas Horizon Setup *.exe"          | Where-Object { $_.Extension -eq ".exe" } | Select-Object -First 1).FullName
-          $blockmapLocal = (Get-ChildItem dist -Filter "Canvas Horizon Setup *.exe.blockmap" | Select-Object -First 1).FullName
-          $yml           = "dist\latest.yml"
-          $version       = "${{ github.ref_name }}".TrimStart("v")
-          $exeName       = "Canvas-Horizon-Setup-${version}.exe"
-          $blockmapName  = "Canvas-Horizon-Setup-${version}.exe.blockmap"
-          Write-Host "Uploading: $exeLocal -> $exeName"
-          Write-Host "Uploading: $blockmapLocal -> $blockmapName"
-          gh release create "${{ github.ref_name }}" `
-            --title "${{ github.ref_name }}" `
-            --notes "Release ${{ github.ref_name }}" `
-            "${exeLocal}#${exeName}" `
-            "${blockmapLocal}#${blockmapName}" `
-            "$yml"
+      - name: GitHub Releases へ一括完全公開
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
+          files: |
+            dist/Canvas-Horizon-Setup-*.exe
+            dist/Canvas-Horizon-Setup-*.exe.blockmap
+            dist/latest.yml
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          make_latest: true
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
