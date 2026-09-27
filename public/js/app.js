@@ -942,12 +942,12 @@ async function initApp() {
     window.desktopAPI.onUpdateStatus((status) => {
       if (!banner || !bannerText || !restartBtn) return;
       if (status.type === 'available') {
-        bannerText.textContent = `新バージョン (${status.version}) をダウンロード中...`;
-        restartBtn.textContent = 'ダウンロード中...';
+        bannerText.textContent = `新バージョン (${status.version}) を準備中...`;
+        restartBtn.textContent = 'ダウンロード中';
         restartBtn.disabled = true;
         banner.style.display = 'flex';
       } else if (status.type === 'progress') {
-        bannerText.textContent = `更新ダウンロード中: ${status.percent}%`;
+        bannerText.textContent = '新バージョンをダウンロード中...';
         restartBtn.textContent = `${status.percent}%`;
         restartBtn.disabled = true;
         banner.style.display = 'flex';
@@ -3040,6 +3040,10 @@ async function checkAppUpdates(isManual = false) {
   // 2. GitHub Releases API からの最新バージョン確認
   try {
     const res = await api.get('/api/app/check-update');
+    const verTag = document.getElementById('app-current-version');
+    if (verTag && res && res.currentVersion) {
+      verTag.textContent = res.currentVersion;
+    }
     if (res && res.hasUpdate) {
       if (banner && bannerText && restartBtn) {
         if (!restartBtn.textContent.includes('再起動') && !restartBtn.textContent.includes('%')) {
