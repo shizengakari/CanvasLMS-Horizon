@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="ja" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <script>
+    (function() {
+      try {
+        var t = localStorage.getItem('canvas_horizon_theme');
+        if (t === 'light' || t === 'dark') {
+          document.documentElement.setAttribute('data-theme', t);
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canvas Horizon</title>
+  <link rel="icon" type="image/png" href="icons/icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="confetti-canvas"></canvas>
+
+  <div class="app-layout">
+    <!-- サイドバー -->
+    <aside class="sidebar">
+      <nav class="sidebar-nav" style="padding-top: 20px;">
+        <a class="nav-item active" data-target="dashboard" id="nav-item-dashboard">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          課題
+          <span class="nav-badge" id="sidebar-urgent-count" style="display: none;">0</span>
+        </a>
+        <a class="nav-item" data-target="materials" id="nav-item-materials">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          講義資料
+        </a>
+        <a class="nav-item" data-target="announcements" id="nav-item-announcements">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"/></svg>
+          お知らせ
+        </a>
+
+        <!-- コース一覧 -->
+        <div class="nav-section-header" style="margin-top: 14px;">
+          <span class="nav-section-title">科目</span>
+          <span class="courses-count-pill" id="sidebar-courses-count">0</span>
+        </div>
+        <div class="sidebar-courses-list" id="sidebar-courses-list">
+          <!-- スクリプトにより動的生成 -->
+        </div>
+      </nav>
+    </aside>
+
+    <!-- メインコンテンツ領域 -->
+    <div class="main-wrapper">
+      <!-- ヘッダー -->
+      <header class="top-header">
+        <div class="header-left">
+          <div class="search-bar-container" id="global-search-trigger" title="あらゆるものを検索 (Ctrl+K)">
+            <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            <input type="text" placeholder="あらゆるものを検索..." readonly>
+            <kbd>Ctrl+K</kbd>
+          </div>
+        </div>
+
+        <div class="header-actions">
+          <!-- アプリ更新通知バナー -->
+          <div class="header-update-banner" id="header-update-banner" style="display: none;">
+            <svg class="update-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            <span class="update-banner-text" id="header-update-text">新バージョンが利用可能です</span>
+            <button type="button" class="btn-update-restart" id="btn-header-update-restart">更新して再起動</button>
+          </div>
+
+          <div class="download-menu-wrap">
+            <button class="icon-btn download-manager-btn" id="btn-download-manager" title="ダウンロード管理" aria-expanded="false">
+              <svg class="dl-icon" width="17" height="17" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v12m0 0l4-4m-4 4l-4-4m-5 6v2a2 2 0 002 2h14a2 2 0 002-2v-2"/></svg>
+              <span class="download-count-badge" id="download-count-badge" hidden>0</span>
+              <div class="dl-btn-progressbar" id="dl-btn-progressbar"></div>
+            </button>
+            <section class="download-panel" id="download-panel" hidden aria-label="ダウンロード管理">
+              <div class="download-panel-header">
+                <div class="download-panel-title">
+                  <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v12m0 0l4-4m-4 4l-4-4m-5 6v2a2 2 0 002 2h14a2 2 0 002-2v-2"/></svg>
+                  <strong>ダウンロード管理</strong>
+                </div>
+                <div class="download-panel-actions">
+                  <button type="button" class="btn-panel-action" id="btn-clear-downloads" title="完了履歴を消去">消去</button>
+                  <button type="button" class="download-panel-close" id="btn-close-download-panel" aria-label="閉じる">×</button>
+                </div>
+              </div>
+              <div class="download-panel-summary" id="download-panel-summary" style="display: none;">
+                <div class="summary-label">
+                  <span id="download-summary-text">ダウンロード中...</span>
+                  <span id="download-summary-percent">0%</span>
+                </div>
+                <div class="summary-bar-track">
+                  <div class="summary-bar-fill" id="download-summary-bar" style="width: 0%;"></div>
+                </div>
+              </div>
+              <div class="download-list" id="download-list">
+                <p class="download-empty">進行中のダウンロードはありません</p>
+              </div>
+            </section>
+          </div>
+
+          <!-- テーマ切り替えボタン -->
+          <button class="icon-btn theme-toggle-btn" id="btn-theme-toggle" title="外観テーマ切り替え (ダーク / ライト)">
+            <svg id="theme-moon-icon" width="17" height="17" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+            <svg id="theme-sun-icon" style="display: none;" width="17" height="17" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+          </button>
+
+          <!-- 同期ボタン -->
+          <button class="icon-btn refresh-btn" id="btn-refresh" title="Canvasから最新データを同期">
+            <svg class="refresh-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            <svg class="refresh-check-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+          </button>
+
+          <!-- 設定ボタン -->
+          <button class="icon-btn header-settings-btn" id="btn-header-settings" title="設定 (Canvas接続・テーマ・同期間隔)">
+            <svg width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- スクロール可能コンテンツ領域 -->
+      <main class="content-body">
+        
+        <!-- 1. ダッシュボード画面 -->
+        <div class="view-page active" id="view-dashboard">
+          
+          <!-- ステータスKPIカード -->
+          <div class="stats-overview-grid">
+            <div class="kpi-card urgent" id="kpi-card-urgent" title="クリックで24時間以内の課題を表示">
+              <div class="kpi-icon-wrap">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              </div>
+              <div class="kpi-content">
+                <div class="kpi-label">24時間以内</div>
+                <div class="kpi-number" id="stat-urgent-val">0</div>
+              </div>
+            </div>
+
+            <div class="kpi-card pending" id="kpi-card-pending" title="クリックで未提出課題を表示">
+              <div class="kpi-icon-wrap">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+              </div>
+              <div class="kpi-content">
+                <div class="kpi-label">未提出</div>
+                <div class="kpi-number" id="stat-pending-val">0</div>
+              </div>
+            </div>
+
+            <div class="kpi-card completed" id="kpi-card-completed" title="クリックで提出済み課題を表示">
+              <div class="kpi-icon-wrap">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              </div>
+              <div class="kpi-content">
+                <div class="kpi-label">提出済み</div>
+                <div class="kpi-number" id="stat-completed-val">0</div>
+              </div>
+            </div>
+
+            <div class="kpi-card courses" id="kpi-card-courses" title="クリックで講義資料へジャンプ">
+              <div class="kpi-icon-wrap">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+              </div>
+              <div class="kpi-content">
+                <div class="kpi-label">履修科目</div>
+                <div class="kpi-number" id="stat-courses-val">0</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 課題フィルターおよび検索ツールバー -->
+          <div class="view-toolbar">
+            <div class="toolbar-left">
+              <div class="filter-pills" id="assignment-status-pills">
+                <button class="pill-btn active" data-filter="unsubmitted">未提出</button>
+                <button class="pill-btn" data-filter="all">すべて</button>
+                <button class="pill-btn" data-filter="submitted">提出済み</button>
+                <button class="pill-btn" data-filter="graded">採点済み</button>
+              </div>
+              <button class="pill-btn quarter-filter-btn" id="btn-toggle-current-q" title="今学期の科目のみに絞り込み">
+                <span class="q-filter-dot"></span>
+                <span id="q-filter-label">今期のみ</span>
+              </button>
+              <div class="results-count-badge" id="dashboard-results-count">0件</div>
+            </div>
+
+            <div class="toolbar-right">
+              <div class="inline-search-box">
+                <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                <input type="text" id="dashboard-search-input" placeholder="課題を検索...">
+                <button class="clear-search-btn" id="btn-clear-dashboard-search" style="display: none;" title="クリア">×</button>
+              </div>
+
+              <div class="sort-select-wrapper">
+                <select class="select-filter select-sort" id="dashboard-sort-select" title="並び替え">
+                  <option value="due-asc">締切が近い順</option>
+                  <option value="due-desc">締切が遠い順</option>
+                  <option value="course">科目名順</option>
+                  <option value="points">配点が高い順</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- 課題カード一覧 -->
+          <div class="assignment-list" id="main-assignment-list">
+            <div class="loading-state-card">
+              <div class="spinner-ring"></div>
+              <span>課題データを同期中...</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. 資料ライブラリ画面 -->
+        <div class="view-page" id="view-materials">
+          <div class="view-toolbar">
+            <div class="toolbar-left">
+              <div class="filter-group">
+                <label class="filter-label">科目:</label>
+                <select class="select-filter" id="material-course-select">
+                  <!-- スクリプトにより動的生成 -->
+                </select>
+              </div>
+              <div class="inline-search-box">
+                <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                <input type="text" id="materials-search-input" placeholder="資料を検索...">
+                <button class="clear-search-btn" id="btn-clear-materials-search" style="display: none;" title="クリア">×</button>
+              </div>
+            </div>
+            <div class="materials-action-group">
+              <button class="btn-secondary" id="btn-toggle-all-modules" title="すべての授業回の開閉を切り替えます">
+                <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4"/></svg>
+                <span id="btn-toggle-all-label">すべて折りたたむ</span>
+              </button>
+              <button class="btn-primary" id="btn-download-all-zip" title="選択したフォルダに講義資料をまとめて直接保存します">
+                <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                全資料を保存
+              </button>
+            </div>
+          </div>
+
+          <!-- モジュール別グループコンテナ -->
+          <div class="grouped-modules-container" id="grouped-modules-container">
+            <!-- スクリプトによりモジュールセクションを動的生成 -->
+          </div>
+        </div>
+
+        <!-- 3. お知らせ画面 -->
+        <div class="view-page" id="view-announcements">
+          <div class="section-header">
+            <h2 class="section-title">連絡事項・お知らせ</h2>
+          </div>
+          <div class="announcements-timeline" id="announcements-timeline-list">
+            <!-- スクリプトにより動的生成 -->
+          </div>
+        </div>
+
+        <!-- 4. 設定画面 -->
+        <div class="view-page" id="view-settings">
+          <div class="section-header" style="display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 14px;">
+              <button type="button" class="btn-secondary btn-sm" id="btn-settings-back" title="元の画面に戻る" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: var(--radius-full); cursor: pointer;">
+                <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+                <span>戻る</span>
+              </button>
+              <h2 class="section-title">設定</h2>
+            </div>
+          </div>
+
+          <div class="settings-section" style="max-width: 680px;">
+            <!-- 初期設定バナー -->
+            <div class="setting-welcome-banner" id="setting-welcome-banner" style="display: none;">
+              <div class="welcome-banner-icon">
+                <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              </div>
+              <div class="welcome-banner-content">
+                <h4>Canvas Horizon へようこそ</h4>
+                <p>ご利用を開始するには、大学の Canvas LMS URL と API トークンを入力して [保存] をクリックしてください。</p>
+              </div>
+            </div>
+
+            <!-- 連携アカウント情報 -->
+            <div class="setting-account-card" id="settings-account-card" style="display: none;">
+              <span class="status-indicator-dot online"></span>
+              <span class="setting-account-status-text" id="settings-user-name">連携済み <strong>Canvas ユーザー</strong> としてログイン中</span>
+            </div>
+
+            <div class="setting-item">
+              <label class="setting-label">Canvas LMS Base URL</label>
+              <input type="text" class="setting-input" id="cfg-base-url" placeholder="https://<大学名>.instructure.com (大学のCanvasログインURL)">
+              <span style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px;">
+                お使いの大学の Canvas LMS のトップページURLを入力してください。
+              </span>
+            </div>
+
+            <div class="setting-item">
+              <label class="setting-label">Canvas API Token</label>
+              <input type="password" class="setting-input" id="cfg-api-token" placeholder="Canvas APIアクセストークン">
+              <span style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px;">
+                Canvas LMSの [アカウント] ➔ [設定] ➔ [新しいアクセストークン] から生成して貼り付けてください。
+              </span>
+            </div>
+
+            <div class="setting-item">
+              <label class="setting-label">学期・科目フィルター (任意)</label>
+              <input type="text" class="setting-input" id="cfg-quarter" placeholder="空欄で全科目表示（例: 3Q, 前期, 秋学期 など）">
+              <span style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px;">
+                空欄の場合は受講中の全科目を表示します。特定の学期のみ絞り込みたい場合はキーワードを入力してください。
+              </span>
+            </div>
+
+            <div class="setting-item">
+              <label class="setting-label">外観テーマ</label>
+              <div class="theme-segmented-control" id="theme-segmented-control">
+                <button type="button" class="theme-segment-btn active" data-theme-val="dark" id="theme-btn-dark">
+                  <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+                  <span>ダーク</span>
+                </button>
+                <button type="button" class="theme-segment-btn" data-theme-val="light" id="theme-btn-light">
+                  <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                  <span>ライト</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- アプリバージョンおよびアップデート管理 -->
+            <div class="setting-item" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border-subtle);">
+              <label class="setting-label">バージョンとアップデート</label>
+              <div class="setting-update-card" id="setting-update-card">
+                <div class="update-card-left">
+                  <div class="update-app-title">Canvas Horizon <span class="update-version-tag" id="app-current-version">v1.0.0</span></div>
+                  <div class="update-app-desc" id="update-status-desc">最新バージョンです</div>
+                </div>
+                <div class="update-card-right">
+                  <button type="button" class="btn-secondary btn-sm" id="btn-check-update">更新を確認</button>
+                </div>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 12px; margin-top: 24px;">
+              <button class="btn-primary" id="btn-save-settings">保存</button>
+              <button class="btn-secondary" id="btn-clear-cache">キャッシュ強制クリア</button>
+            </div>
+          </div>
+        </div>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- 課題詳細および提出モーダル -->
+  <div class="modal-overlay" id="assignment-modal">
+    <div class="modal-container assignment-modal-container" id="assignment-modal-container">
+      <div class="modal-header">
+        <div class="modal-header-meta">
+          <span style="font-size: 12px; color: var(--text-muted); font-weight: 600;" id="modal-course-name">コース名</span>
+          <h2 id="modal-assignment-title" style="margin-top: 2px;">課題タイトル</h2>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <button class="icon-btn" id="btn-toggle-editor-wide" title="執筆ワイドモード切替 (左の説明を見ながらエディタを広大化) [Alt+W]">
+            <svg id="editor-wide-icon-expand" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+            <svg id="editor-wide-icon-collapse" style="display: none;" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+          </button>
+          <button class="icon-btn" id="assignment-modal-fullscreen-btn" title="全画面表示切替 (Escで閉じる)">
+            <svg id="assignment-expand-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+            <svg id="assignment-compress-icon" style="display: none;" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 14h6m0 0v6m0-6L3 21m17-7h-6m0 0v6m0-6l7 7M10 4v6m0 0H4m6 0L3 3m10 7h6m-6 0V4m0 6l7-7"/></svg>
+          </button>
+          <button class="icon-btn" id="modal-close-btn" title="閉じる (Esc)">
+            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="modal-body assignment-modal-body">
+        <div class="assignment-modal-grid">
+          <!-- 左カラム: 課題仕様および詳細説明 -->
+          <div class="assignment-modal-col-left">
+            <!-- 仕様グリッド -->
+            <div class="assignment-specs-grid">
+              <div class="spec-item">
+                <span class="spec-label">提出期限</span>
+                <span class="spec-value" id="modal-due-date">-</span>
+              </div>
+              <div class="spec-item">
+                <span class="spec-label">配点</span>
+                <span class="spec-value" id="modal-points">-</span>
+              </div>
+              <div class="spec-item">
+                <span class="spec-label">状態</span>
+                <span class="spec-value" id="modal-status-badge">-</span>
+              </div>
+              <div class="spec-item">
+                <span class="spec-label">形式</span>
+                <span class="spec-value" id="modal-allowed-types">-</span>
+              </div>
+            </div>
+
+            <!-- 詳細説明領域 -->
+            <div class="assignment-desc-wrapper">
+              <div class="assignment-desc-header">
+                <span class="spec-label">課題内容</span>
+              </div>
+              <div class="assignment-description-box" id="modal-description-box">説明なし</div>
+            </div>
+          </div>
+
+          <!-- 右カラム: 提出パネルおよび履歴 -->
+          <div class="assignment-modal-col-right">
+            <!-- オンラインクイズ案内 -->
+            <div class="quiz-notice-box" id="modal-quiz-notice" style="display: none;">
+              <div style="display: flex; gap: 12px; align-items: flex-start;">
+                <svg width="22" height="22" fill="none" stroke="var(--accent-secondary)" viewBox="0 0 24 24" style="flex-shrink: 0;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+                <div>
+                  <h4 style="font-weight: 700; color: var(--text-main); margin-bottom: 4px;">アンケート / 小テスト</h4>
+                  <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.6;">
+                    Canvas公式ページを開いて直接受験・回答してください。
+                  </p>
+                </div>
+              </div>
+              <div style="margin-top: 14px;">
+                <a class="btn-primary" id="btn-open-canvas-quiz" href="#" target="_blank" rel="noopener noreferrer">
+                  Canvasで回答する ↗
+                </a>
+              </div>
+            </div>
+
+            <!-- 外部提出案内 -->
+            <div class="external-notice-box" id="modal-external-notice" style="display: none;">
+              <div style="display: flex; gap: 12px; align-items: flex-start;">
+                <svg width="22" height="22" fill="none" stroke="var(--accent-secondary)" viewBox="0 0 24 24" style="flex-shrink: 0;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <div>
+                  <h4 style="font-weight: 700; color: var(--text-main); margin-bottom: 4px;" id="modal-external-notice-title">対面・学外提出</h4>
+                  <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.6;" id="modal-external-notice-desc">
+                    授業内または指定の方法で提出してください。
+                  </p>
+                </div>
+              </div>
+              <div style="margin-top: 14px;">
+                <a class="btn-secondary" id="btn-open-canvas-external" href="#" target="_blank" rel="noopener noreferrer">
+                  Canvasで確認する ↗
+                </a>
+              </div>
+            </div>
+
+            <!-- 提出済みファイル一覧 -->
+            <div class="submitted-history-box" id="modal-history-section" style="display: none;">
+              <div class="history-header">
+                <div>
+                  <div class="history-title">
+                    <svg width="15" height="15" fill="none" stroke="var(--status-submitted)" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                    <span>提出済みファイル</span>
+                    <span class="history-count-badge" id="modal-history-count">0件</span>
+                  </div>
+                  <div class="history-subtitle">
+                    チェックしたファイルは保持されます
+                  </div>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                  <button class="btn-secondary btn-sm" id="btn-download-submission-zip" title="選択したフォルダに提出ファイルを直接保存します">全件保存</button>
+                </div>
+              </div>
+              <div class="history-files-list" id="modal-history-files-list"></div>
+            </div>
+
+            <!-- 提出種別タブ -->
+            <div class="modal-submission-tabs" id="modal-submission-tabs" style="display: none;">
+              <button class="sub-tab-btn active" data-tab="upload" id="sub-tab-upload">
+                <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                ファイル提出
+              </button>
+              <button class="sub-tab-btn" data-tab="text" id="sub-tab-text">
+                <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                テキスト記述
+              </button>
+              <button class="sub-tab-btn" data-tab="url" id="sub-tab-url">
+                <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+                Web URL
+              </button>
+            </div>
+
+            <!-- 1. ファイルアップロードタブ -->
+            <div class="submission-tab-content active" id="tab-content-upload">
+              <input type="file" id="bulk-file-input" multiple style="display: none;">
+              <div class="dropzone-container" id="bulk-dropzone">
+                <div class="dropzone-icon">
+                  <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                </div>
+                <div class="dropzone-title">ファイルをドラッグ＆ドロップ</div>
+                <div class="dropzone-subtitle">またはクリックして選択</div>
+              </div>
+
+              <!-- アップロード待機ファイル一覧 -->
+              <div class="selected-files-list" id="modal-files-queue" style="margin-top: 10px; display: none;"></div>
+
+              <!-- コメント入力領域 -->
+              <div style="margin-top: 12px;">
+                <label class="spec-label" style="display: block; margin-bottom: 4px;">コメント（任意）</label>
+                <textarea class="submission-comment-box" id="modal-submission-comment" placeholder="連絡事項があれば入力"></textarea>
+              </div>
+
+              <!-- 進捗バー -->
+              <div class="upload-progress-container" id="modal-upload-progress">
+                <div class="progress-track">
+                  <div class="progress-fill" id="modal-progress-bar"></div>
+                </div>
+                <div class="progress-text">
+                  <span id="modal-progress-status">送信中...</span>
+                  <span id="modal-progress-percentage">0%</span>
+                </div>
+              </div>
+
+              <!-- 提出実行ボタン -->
+              <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 16px;">
+                <button class="btn-primary" id="btn-execute-submit" disabled>
+                  <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                  <span id="btn-submit-label">提出する</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- 2. テキスト入力タブ -->
+            <div class="submission-tab-content text-submission-tab" id="tab-content-text" style="display: none;">
+              <div class="editor-toolbar-row">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <label class="spec-label" style="margin-bottom: 0;">回答テキスト</label>
+                  <span class="char-count-badge" id="modal-text-char-count">0 文字</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <button type="button" class="action-chip-btn" id="btn-quick-wide-toggle" title="左の要件を見ながらエディタを広く使う">
+                    <span id="btn-quick-wide-text">執筆ワイド表示</span>
+                  </button>
+                </div>
+              </div>
+              
+              <div class="editor-textarea-wrapper">
+                <textarea class="submission-text-editor" id="modal-text-entry-body" placeholder="ここに回答を入力してください... (Ctrl+Enter で提出可能)"></textarea>
+              </div>
+              
+              <div class="editor-bottom-bar">
+                <div class="editor-comment-field">
+                  <input type="text" class="setting-input compact-comment-input" id="modal-text-comment" placeholder="コメント・連絡事項があれば入力 (任意)">
+                </div>
+
+                <div style="display: flex; justify-content: flex-end; align-items: center; gap: 12px;">
+                  <button class="btn-primary" id="btn-execute-text-submit">
+                    <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                    <span>提出する</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 3. URL提出タブ -->
+            <div class="submission-tab-content" id="tab-content-url" style="display: none;">
+              <label class="spec-label" style="display: block; margin-bottom: 6px;">提出先URL</label>
+              <input type="url" class="setting-input" id="modal-url-entry-url" placeholder="https://..." style="width: 100%;">
+              
+              <div style="margin-top: 12px;">
+                <label class="spec-label" style="display: block; margin-bottom: 4px;">コメント（任意）</label>
+                <textarea class="submission-comment-box" id="modal-url-comment" placeholder="連絡事項があれば入力"></textarea>
+              </div>
+
+              <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 16px;">
+                <button class="btn-primary" id="btn-execute-url-submit">
+                  <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                  <span>提出する</span>
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PDF閲覧モーダル -->
+  <div class="modal-overlay" id="pdf-modal">
+    <div class="modal-container" id="pdf-modal-container">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
+          <svg width="18" height="18" fill="none" stroke="var(--status-urgent)" viewBox="0 0 24 24" style="flex-shrink: 0;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+          <span style="font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" id="pdf-modal-title">PDFプレビュー</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+          <button type="button" class="action-chip-btn action-download" id="pdf-modal-download-btn" title="ダウンロードフォルダに保存">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            <span>保存</span>
+          </button>
+          <button class="icon-btn" id="pdf-modal-fullscreen-btn" title="全画面表示切替 (Escで戻る)">
+            <svg id="pdf-expand-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+            <svg id="pdf-compress-icon" style="display: none;" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 14h6m0 0v6m0-6L3 21m17-7h-6m0 0v6m0-6l7 7M10 4v6m0 0H4m6 0L3 3m10 7h6m-6 0V4m0 6l7-7"/></svg>
+          </button>
+          <button class="icon-btn" id="pdf-modal-close-btn" title="閉じる (Esc)">
+            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+      <div style="flex: 1; position: relative; width: 100%; height: 100%; display: flex; overflow: hidden; background: #1a1a24;">
+        <div id="pdf-loading-spinner" style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--text-muted); background: #111420; z-index: 2; transition: opacity 0.25s ease;">
+          <svg class="spin" width="28" height="28" fill="none" stroke="var(--accent-primary)" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          <span style="font-size: 13px; font-weight: 500;">読み込み中...</span>
+        </div>
+        <iframe class="pdf-viewer-frame" id="pdf-iframe" style="flex: 1; border: none; width: 100%; height: 100%; position: relative; z-index: 1;"></iframe>
+      </div>
+    </div>
+  </div>
+
+  <!-- ページ閲覧モーダル -->
+  <div class="modal-overlay" id="page-modal">
+    <div class="modal-container" id="page-modal-container">
+      <div class="modal-header">
+        <div class="modal-header-meta">
+          <span style="font-size: 12px; color: var(--accent-secondary); font-weight: 600;">講義ノート・連絡</span>
+          <h2 id="page-modal-title" style="margin-top: 2px;">ページタイトル</h2>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+          <button class="icon-btn" id="page-modal-fullscreen-btn" title="全画面表示切替 (Escで戻る)">
+            <svg id="page-expand-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+            <svg id="page-compress-icon" style="display: none;" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 14h6m0 0v6m0-6L3 21m17-7h-6m0 0v6m0-6l7 7M10 4v6m0 0H4m6 0L3 3m10 7h6m-6 0V4m0 6l7-7"/></svg>
+          </button>
+          <button class="icon-btn" id="page-modal-close-btn" title="閉じる (Esc)">
+            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="modal-body" style="padding: 24px; flex: 1; overflow-y: auto;">
+        <div class="page-content-box" id="page-modal-body">
+          読み込み中...
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 動画閲覧モーダル -->
+  <div class="modal-overlay" id="youtube-modal">
+    <div class="modal-container" id="youtube-modal-container">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 10px; overflow: hidden;">
+          <svg width="20" height="20" fill="none" stroke="#ef4444" viewBox="0 0 24 24" style="flex-shrink: 0;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <span style="font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-main);" id="youtube-modal-title">動画再生</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+          <button class="action-chip-btn action-download" id="youtube-modal-dl-btn" title="動画をダウンロードフォルダに保存">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            <span>保存</span>
+          </button>
+          <a class="action-chip-btn" id="youtube-modal-external-btn" href="#" target="_blank" rel="noopener noreferrer" title="ブラウザでYouTubeを開く">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            <span>YouTubeで開く</span>
+          </a>
+          <button class="icon-btn" id="youtube-modal-fullscreen-btn" title="全画面表示切替 (Escで戻る)">
+            <svg id="youtube-expand-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+            <svg id="youtube-compress-icon" style="display: none;" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 14h6m0 0v6m0-6L3 21m17-7h-6m0 0v6m0-6l7 7M10 4v6m0 0H4m6 0L3 3m10 7h6m-6 0V4m0 6l7-7"/></svg>
+          </button>
+          <button class="icon-btn" id="youtube-modal-close-btn" title="閉じる (Esc)">
+            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="youtube-player-wrapper" style="flex: 1; display: flex; align-items: center; justify-content: center; background: #000; overflow: hidden; position: relative;">
+        <div id="youtube-iframe-container" style="width: 100%; height: 100%; position: relative;">
+          <!-- スクリプトにより動画プレーヤーを動的生成 -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- コマンドパレット (Ctrl+K) -->
+  <div class="command-palette-overlay" id="command-palette">
+    <div class="command-palette">
+      <div class="palette-input-box">
+        <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        <input type="text" id="palette-search-input" placeholder="あらゆるものを検索..." autofocus>
+        <kbd>Esc</kbd>
+      </div>
+      <div class="palette-results" id="palette-results-list"></div>
+    </div>
+  </div>
+
+  <!-- トースト通知コンテナ -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- アプリケーションロジック -->
+  <script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,3328 @@
+/**
+ * Canvas Horizon - フロントエンド制御ロジック
+ * 洗練されたUI/UXと高速性を備えた Canvas LMS デスクトップクライアント
+ */
+
+// アプリケーション全体の状態管理 (State)
+const state = {
+  profile: null,
+  config: null,
+  courses: [],
+  selectedCourseId: 'all',
+  allAssignments: [],
+  groupedMaterials: [],
+  announcements: [],
+  activeView: 'dashboard',
+  assignmentFilter: 'unsubmitted', // デフォルトは未提出課題を表示
+  onlyCurrentQuarterTasks: false, // 今学期の課題のみに絞り込み
+  sidebarQuarterFilter: 'all', // サイドバーの学期フィルター ('all' | '1Q' | '2Q' | '3Q' | '4Q')
+  currentQuarter: '',
+  dashboardSearchQuery: '',
+  dashboardSort: 'due-asc',
+  currentModalAssignment: null,
+  filesQueue: [],
+  isSubmitting: false,
+  materialsCourseId: null
+};
+
+// ユーティリティ関数群
+const utils = {
+  escapeHtml(str) {
+    if (str == null) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  },
+
+  formatDate(isoString, includeYear = false) {
+    if (!isoString) return '期限なし';
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return '期限なし';
+    const days = ['日', '月', '火', '水', '木', '金', '土'];
+    const y = d.getFullYear();
+    const currentYear = new Date().getFullYear();
+    const m = d.getMonth() + 1;
+    const date = d.getDate();
+    const day = days[d.getDay()];
+    const h = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+
+    const yearPrefix = (includeYear || y !== currentYear) ? `${y}年` : '';
+    return `${yearPrefix}${m}月${date}日(${day}) ${h}:${min}`;
+  },
+
+  getDueUrgency(isoString, isSubmitted) {
+    if (isSubmitted) return { text: '提出済み', level: 'submitted' };
+    if (!isoString) return { text: '期限なし', level: 'none' };
+    const now = new Date();
+    const due = new Date(isoString);
+    const diffMs = due - now;
+
+    if (diffMs < 0) {
+      const diffHours = Math.floor(Math.abs(diffMs) / (1000 * 60 * 60));
+      if (diffHours < 24) return { text: '本日締切超過', level: 'urgent' };
+      return { text: `${Math.floor(diffHours / 24)}日前に締切`, level: 'urgent' };
+    }
+
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    if (diffHours < 24) {
+      if (diffHours <= 0) return { text: 'まもなく締切', level: 'urgent' };
+      return { text: `残り ${diffHours}時間`, level: 'urgent' };
+    }
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays <= 3) {
+      return { text: `残り ${diffDays}日`, level: 'pending' };
+    }
+    return { text: `残り ${diffDays}日`, level: 'normal' };
+  },
+
+  getCourseColor(courseIdOrName) {
+    let hash = 0;
+    const str = String(courseIdOrName || '');
+    for (let i = 0; i < str.length; i++) {
+      hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const idx = Math.abs(hash) % 6;
+    return {
+      index: idx,
+      tagClass: `course-tag-${idx}`,
+      dotClass: `course-dot-${idx}`
+    };
+  },
+
+  formatBytes(bytes) {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  },
+
+  getFileExt(filename) {
+    if (!filename) return '';
+    const parts = filename.split('.');
+    return parts.length > 1 ? parts.pop().toUpperCase() : 'FILE';
+  },
+
+  renderQuarterBadge(quarter, isCurrent = false) {
+    if (!quarter) return '<span class="badge-q badge-other-q">通年</span>';
+    const qLower = quarter.toLowerCase();
+    const cls = ['1q', '2q', '3q', '4q'].includes(qLower) ? `badge-${qLower}` : 'badge-other-q';
+    const highlightCls = isCurrent ? ' current-highlight' : '';
+    const icon = isCurrent ? '<span class="current-q-dot"></span>' : '';
+    return `<span class="badge-q ${cls}${highlightCls}">${icon}${quarter}</span>`;
+  },
+
+  extractYouTubeVideoId(url) {
+    if (!url) return null;
+    const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
+    const match = String(url).match(regExp);
+    return match && match[1] ? match[1] : null;
+  },
+
+  formatHtmlWithLinks(html) {
+    if (!html) return '';
+    // プレーンテキストで書かれたURLを検出して美しいリンクに変換
+    const urlRegex = /(?![^<]*>)(https?:\/\/[^\s<>"']+)/g;
+    let formatted = html.replace(urlRegex, (url) => {
+      const ytId = utils.extractYouTubeVideoId(url);
+      if (ytId) {
+        return `<a href="${url}" class="formatted-url-link yt-inline-link" data-yt-id="${ytId}">▶ YouTube動画を再生</a>`;
+      }
+      return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="formatted-url-link">${url}</a>`;
+    });
+    return formatted;
+  },
+
+  openExternalUrl(url) {
+    if (!url || url === '#' || url.startsWith('javascript:')) return;
+    const ytId = utils.extractYouTubeVideoId(url);
+    if (ytId) {
+      openYouTubeModal(ytId, 'YouTube動画', url);
+      return;
+    }
+    if (window.desktopAPI && typeof window.desktopAPI.openExternal === 'function') {
+      window.desktopAPI.openExternal(url);
+    } else {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  }
+};
+
+// API 通信クライアント
+const api = {
+  async get(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    return await res.json();
+  },
+
+  async post(url, data, isFormData = false) {
+    const options = {
+      method: 'POST',
+      body: isFormData ? data : JSON.stringify(data)
+    };
+    if (!isFormData) {
+      options.headers = { 'Content-Type': 'application/json' };
+    }
+    const res = await fetch(url, options);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+};
+
+// トースト通知（右下通知の抑制管理）
+function showToast(message, type = 'normal') {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+  // 右下の通知トーストはユーザー要望により非表示
+}
+
+// ダウンロード管理システム（ヘッダーアイコンと進捗バーで統合管理）
+const downloadManager = {
+  jobs: [],
+  pollTimer: null,
+  isPanelOpen: false,
+
+  init() {
+    this.btn = document.getElementById('btn-download-manager');
+    this.badge = document.getElementById('download-count-badge');
+    this.btnProgressBar = document.getElementById('dl-btn-progressbar');
+    this.panel = document.getElementById('download-panel');
+    this.closeBtn = document.getElementById('btn-close-download-panel');
+    this.clearBtn = document.getElementById('btn-clear-downloads');
+    this.listEl = document.getElementById('download-list');
+    this.summaryEl = document.getElementById('download-panel-summary');
+    this.summaryText = document.getElementById('download-summary-text');
+    this.summaryPercent = document.getElementById('download-summary-percent');
+    this.summaryBar = document.getElementById('download-summary-bar');
+
+    if (this.btn) {
+      this.btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.togglePanel();
+      });
+    }
+
+    if (this.closeBtn) {
+      this.closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.closePanel();
+      });
+    }
+
+    if (this.clearBtn) {
+      this.clearBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await this.clearCompleted();
+      });
+    }
+
+    // パネルの外側クリックで閉じる
+    document.addEventListener('click', (e) => {
+      if (this.isPanelOpen && this.panel && !this.panel.contains(e.target) && !this.btn?.contains(e.target)) {
+        this.closePanel();
+      }
+    });
+
+    // Escキーで閉じる
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.isPanelOpen) {
+        this.closePanel();
+      }
+    });
+
+    // 初回ジョブ取得
+    this.fetchJobs();
+  },
+
+  togglePanel() {
+    if (this.isPanelOpen) {
+      this.closePanel();
+    } else {
+      this.openPanel();
+    }
+  },
+
+  openPanel() {
+    if (!this.panel) return;
+    this.panel.hidden = false;
+    this.isPanelOpen = true;
+    this.btn?.setAttribute('aria-expanded', 'true');
+    this.render();
+  },
+
+  closePanel() {
+    if (!this.panel) return;
+    this.panel.hidden = true;
+    this.isPanelOpen = false;
+    this.btn?.setAttribute('aria-expanded', 'false');
+  },
+
+  async fetchJobs() {
+    try {
+      const res = await api.get('/api/downloads');
+      if (res.success && Array.isArray(res.downloads)) {
+        this.jobs = res.downloads;
+        this.render();
+        this.updateState();
+      }
+    } catch (err) {
+      console.warn('Failed to fetch downloads:', err);
+    }
+  },
+
+  addJob(job) {
+    if (!job) return;
+    const existingIdx = this.jobs.findIndex(j => j.id === job.id);
+    if (existingIdx >= 0) {
+      this.jobs[existingIdx] = job;
+    } else {
+      this.jobs.unshift(job);
+    }
+    this.render();
+    this.updateState();
+    this.startPolling();
+  },
+
+  updateState() {
+    const activeJobs = this.jobs.filter(j => j.status === 'downloading');
+    const hasActive = activeJobs.length > 0;
+
+    // Electronにダウンロード中フラグを送信（アプリ終了時の警告確認用）
+    if (window.desktopAPI && typeof window.desktopAPI.setDownloadsActive === 'function') {
+      window.desktopAPI.setDownloadsActive(hasActive);
+    }
+
+    // バッジ更新
+    if (this.badge) {
+      if (hasActive) {
+        this.badge.hidden = false;
+        this.badge.textContent = activeJobs.length;
+      } else {
+        this.badge.hidden = true;
+      }
+    }
+
+    // ボタンのスタイルとインライン進捗バー更新
+    if (this.btn) {
+      this.btn.classList.toggle('is-active', hasActive);
+    }
+
+    if (this.btnProgressBar) {
+      if (hasActive) {
+        const totalProgress = activeJobs.reduce((acc, j) => acc + (j.progress || 0), 0);
+        const avgProgress = Math.round(totalProgress / activeJobs.length);
+        this.btnProgressBar.style.width = `${Math.max(6, avgProgress)}%`;
+        this.btnProgressBar.style.display = 'block';
+      } else {
+        this.btnProgressBar.style.width = '0%';
+        this.btnProgressBar.style.display = 'none';
+      }
+    }
+
+    // ポーリング制御
+    if (hasActive) {
+      this.startPolling();
+    } else {
+      this.stopPolling();
+    }
+  },
+
+  startPolling() {
+    if (this.pollTimer) return;
+    this.pollTimer = setInterval(() => {
+      this.fetchJobs();
+    }, 1000);
+  },
+
+  stopPolling() {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+  },
+
+  async cancelJob(id) {
+    try {
+      await api.post(`/api/downloads/${id}/cancel`, {});
+      await this.fetchJobs();
+    } catch (err) {
+      console.error('Cancel error:', err);
+    }
+  },
+
+  async clearCompleted() {
+    try {
+      await api.post('/api/downloads/clear', {});
+      this.jobs = this.jobs.filter(j => j.status === 'downloading');
+      this.render();
+      this.updateState();
+    } catch (err) {
+      console.error('Clear downloads error:', err);
+    }
+  },
+
+  async openJobFolder(job) {
+    if (!job) return;
+    const targetPath = job.saveDir || job.fileName;
+    if (targetPath) {
+      if (window.desktopAPI && typeof window.desktopAPI.openPath === 'function') {
+        window.desktopAPI.openPath(targetPath);
+      } else {
+        api.post('/api/open-path', { targetPath });
+      }
+    } else {
+      api.post('/api/open-downloads', {});
+    }
+  },
+
+  render() {
+    if (!this.listEl) return;
+
+    if (this.jobs.length === 0) {
+      this.listEl.innerHTML = '<p class="download-empty">進行中のダウンロードはありません</p>';
+      if (this.summaryEl) this.summaryEl.style.display = 'none';
+      return;
+    }
+
+    const activeJobs = this.jobs.filter(j => j.status === 'downloading');
+    if (this.summaryEl) {
+      if (activeJobs.length > 0) {
+        this.summaryEl.style.display = 'block';
+        const total = activeJobs.reduce((sum, j) => sum + (j.progress || 0), 0);
+        const avg = Math.round(total / activeJobs.length);
+        if (this.summaryText) this.summaryText.textContent = `${activeJobs.length}件ダウンロード中`;
+        if (this.summaryPercent) this.summaryPercent.textContent = `${avg}%`;
+        if (this.summaryBar) this.summaryBar.style.width = `${avg}%`;
+      } else {
+        this.summaryEl.style.display = 'none';
+      }
+    }
+
+    try {
+      this.listEl.innerHTML = this.jobs.map(job => {
+        const isYt = job.type === 'youtube';
+        const isCompleted = job.status === 'completed';
+        const isFailed = job.status === 'failed';
+        const isCancelled = job.status === 'cancelled';
+        const isDownloading = job.status === 'downloading';
+        const progress = Math.min(100, Math.max(0, job.progress || 0));
+
+        const iconHtml = isYt 
+          ? `<div class="download-item-icon youtube" title="YouTube動画"><svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg></div>`
+          : `<div class="download-item-icon" title="講義資料・ファイル"><svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg></div>`;
+
+        let statusText = job.message || '';
+        if (isCompleted) {
+          statusText = `✓ 保存完了`;
+        } else if (isFailed) {
+          statusText = `✕ 失敗: ${job.error || '保存エラー'}`;
+        } else if (isCancelled) {
+          statusText = `キャンセル`;
+        } else if (isDownloading) {
+          statusText = `${progress}% • ${statusText}`;
+        }
+
+        const safeTitle = utils.escapeHtml(job.title || 'ダウンロード');
+        const safeDir = job.saveDir ? utils.escapeHtml(job.saveDir) : '';
+
+        return `
+          <div class="download-item ${job.status}" data-id="${job.id}">
+            <div class="download-item-top">
+              ${iconHtml}
+              <div class="download-item-info">
+                <div class="download-item-title" title="${safeTitle}">${safeTitle}</div>
+                <div class="download-item-status">${utils.escapeHtml(statusText)}</div>
+                ${safeDir ? `<div style="font-size: 10px; color: var(--text-muted); opacity: 0.8; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="保存先: ${safeDir}">保存先: ${safeDir}</div>` : ''}
+              </div>
+            </div>
+            <div class="download-progress">
+              <span style="width: ${progress}%;"></span>
+            </div>
+            <div class="download-item-actions">
+              ${isDownloading ? `
+                <button type="button" class="dl-item-btn btn-cancel" onclick="window.downloadManager.cancelJob('${job.id}')">キャンセル</button>
+              ` : ''}
+              ${isCompleted ? `
+                <button type="button" class="dl-item-btn btn-open" onclick="window.downloadManager.openJobFolder(window.downloadManager.jobs.find(j => j.id === '${job.id}'))">
+                  <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+                  フォルダを開く
+                </button>
+              ` : ''}
+            </div>
+          </div>
+        `;
+      }).join('');
+    } catch (renderErr) {
+      console.error('Download list render error:', renderErr);
+    }
+  }
+};
+
+window.downloadManager = downloadManager;
+
+// ブラウザ終了時の警告ガード（Webブラウザ専用。Electron環境ではメインプロセスで安全に処理）
+if (!window.desktopAPI) {
+  window.addEventListener('beforeunload', (e) => {
+    const hasActive = downloadManager.jobs.some(j => j.status === 'downloading');
+    if (hasActive) {
+      e.preventDefault();
+      e.returnValue = 'ダウンロード中のタスクがあります。';
+    }
+  });
+}
+
+// 通常ファイル一括保存（ダイアログなしでOS既定のダウンロードフォルダへ直接即座に保存）
+async function downloadFilesToFolder(fileList, title, folderName) {
+  if (!fileList || !Array.isArray(fileList) || fileList.length === 0) {
+    showToast('ダウンロード可能なファイルがありません');
+    return;
+  }
+
+  // 場所を聞かずに即座にダウンロード開始（~/Downloads/Canvas Horizon/[科目名] に自動保存）
+  const targetDir = null;
+
+  // UIに即座に「開始中」フィードバックを表示
+  const tempJobId = `batch-init-${Date.now()}`;
+  const tempJob = {
+    id: tempJobId,
+    type: 'batch-files',
+    title: title || '講義資料の一括保存',
+    status: 'downloading',
+    progress: 2,
+    totalCount: fileList.length,
+    completedCount: 0,
+    saveDir: 'ダウンロード',
+    message: `準備中 (${fileList.length}件)`
+  };
+  downloadManager.addJob(tempJob);
+  downloadManager.openPanel();
+
+  try {
+    const res = await api.post('/api/files/download-batch', {
+      files: fileList,
+      title: title || '講義資料',
+      folderName: folderName || title,
+      targetDir
+    });
+
+    // テンポラリジョブを削除
+    downloadManager.jobs = downloadManager.jobs.filter(j => j.id !== tempJobId);
+
+    if (res.success && res.job) {
+      downloadManager.addJob(res.job);
+      downloadManager.openPanel();
+    } else {
+      downloadManager.render();
+      downloadManager.updateState();
+    }
+  } catch (err) {
+    console.error('Batch download start error:', err);
+    const j = downloadManager.jobs.find(j => j.id === tempJobId);
+    if (j) {
+      j.status = 'failed';
+      j.error = err.message || '通信エラー';
+      j.message = '保存に失敗しました';
+      downloadManager.render();
+      downloadManager.updateState();
+    }
+  }
+}
+
+// レガシー互換エイリアス（ZIPダウンロード呼び出しもフォルダ通常保存へ橋渡し）
+async function downloadFilesAsZip(fileList, zipName) {
+  const cleanTitle = (zipName || '講義資料').replace(/\.zip$/i, '');
+  await downloadFilesToFolder(fileList, cleanTitle, cleanTitle);
+}
+
+// 単体ファイルの直接保存
+async function downloadSingleFile({ id, url, name, courseId }) {
+  const fileName = name || 'file.pdf';
+
+  const tempJobId = `single-init-${Date.now()}`;
+  const tempJob = {
+    id: tempJobId,
+    type: 'single-file',
+    title: fileName,
+    status: 'downloading',
+    progress: 10,
+    saveDir: 'ダウンロード',
+    message: '保存中...'
+  };
+  downloadManager.addJob(tempJob);
+  downloadManager.openPanel();
+
+  try {
+    const res = await api.post('/api/files/download-single', {
+      id,
+      url,
+      name: fileName,
+      courseId: courseId || state.materialsCourseId
+    });
+
+    downloadManager.jobs = downloadManager.jobs.filter(j => j.id !== tempJobId);
+
+    if (res.success && res.job) {
+      downloadManager.addJob(res.job);
+      downloadManager.openPanel();
+    } else {
+      downloadManager.render();
+      downloadManager.updateState();
+    }
+  } catch (err) {
+    console.error('Single download start error:', err);
+    const j = downloadManager.jobs.find(j => j.id === tempJobId);
+    if (j) {
+      j.status = 'failed';
+      j.error = err.message || '通信エラー';
+      j.message = '保存に失敗しました';
+      downloadManager.render();
+      downloadManager.updateState();
+    }
+  }
+}
+
+// 課題提出完了時の演出アニメーション
+function triggerConfetti() {
+  const canvas = document.getElementById('confetti-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+
+  const particles = [];
+  const colors = ['#6366f1', '#06b6d4', '#10b981', '#f59e0b', '#ec4899', '#ffffff'];
+
+  for (let i = 0; i < 90; i++) {
+    particles.push({
+      x: canvas.width / 2,
+      y: canvas.height / 2,
+      vx: (Math.random() - 0.5) * 16,
+      vy: (Math.random() - 0.7) * 16,
+      size: Math.random() * 8 + 4,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      gravity: 0.35,
+      opacity: 1,
+      rotation: Math.random() * 360,
+      vRot: (Math.random() - 0.5) * 10
+    });
+  }
+
+  let animationFrame;
+  function animate() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    let alive = false;
+
+    particles.forEach(p => {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += p.gravity;
+      p.vx *= 0.98;
+      p.opacity -= 0.014;
+      p.rotation += p.vRot;
+
+      if (p.opacity > 0) {
+        alive = true;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate((p.rotation * Math.PI) / 180);
+        ctx.globalAlpha = p.opacity;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
+        ctx.restore();
+      }
+    });
+
+    if (alive) {
+      animationFrame = requestAnimationFrame(animate);
+    } else {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      cancelAnimationFrame(animationFrame);
+    }
+  }
+  animate();
+}
+
+// 画面遷移・ナビゲーション制御
+function setupNavigation() {
+  const navItems = document.querySelectorAll('.sidebar-nav .nav-item');
+  navItems.forEach(item => {
+    item.addEventListener('click', (e) => {
+      e.preventDefault();
+      const target = item.dataset.target;
+      switchView(target);
+    });
+  });
+
+  // ヘッダーの設定ボタン
+  const headerSettingsBtn = document.getElementById('btn-header-settings');
+  if (headerSettingsBtn) {
+    headerSettingsBtn.addEventListener('click', () => {
+      const baseUrl = document.getElementById('cfg-base-url')?.value?.trim();
+      const apiToken = document.getElementById('cfg-api-token')?.value?.trim();
+      const welcomeBanner = document.getElementById('setting-welcome-banner');
+      if (welcomeBanner) {
+        welcomeBanner.style.display = (baseUrl && apiToken) ? 'none' : 'flex';
+      }
+      switchView('settings');
+    });
+  }
+
+  // 設定画面の戻るボタン
+  const settingsBackBtn = document.getElementById('btn-settings-back');
+  if (settingsBackBtn) {
+    settingsBackBtn.addEventListener('click', () => {
+      switchView('dashboard');
+    });
+  }
+}
+
+function switchView(viewName) {
+  state.activeView = viewName;
+  document.querySelectorAll('.sidebar-nav .nav-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.target === viewName);
+  });
+  document.querySelectorAll('.view-page').forEach(page => {
+    page.classList.toggle('active', page.id === `view-${viewName}`);
+  });
+
+  // ヘッダー設定ボタンの active 状態
+  const headerSettingsBtn = document.getElementById('btn-header-settings');
+  if (headerSettingsBtn) {
+    headerSettingsBtn.classList.toggle('active', viewName === 'settings');
+  }
+
+  // materials 以外のビュー（dashboard 等）ではサイドバー科目の選択状態を解除
+  document.querySelectorAll('.sidebar-course-item').forEach(el => {
+    const isItemActive = (viewName === 'materials') && el.dataset.courseId && (String(el.dataset.courseId) === String(state.materialsCourseId));
+    el.classList.toggle('active', Boolean(isItemActive));
+  });
+
+  if (viewName === 'materials') {
+    if (!state.materialsCourseId && state.courses.length > 0) {
+      state.materialsCourseId = state.courses[0].id;
+      const matSelect = document.getElementById('material-course-select');
+      if (matSelect) matSelect.value = state.materialsCourseId;
+    }
+    if (state.materialsCourseId && (!state.groupedMaterials || state.groupedMaterials.length === 0)) {
+      loadCourseMaterialsGrouped(state.materialsCourseId);
+    }
+  } else if (viewName === 'announcements' && (!state.announcements || state.announcements.length === 0)) {
+    loadAnnouncements();
+  }
+}
+
+// テーマ切り替え制御（ヘッダーアイコン、設定セグメント）
+function setupTheme() {
+  const headerToggleBtn = document.getElementById('btn-theme-toggle');
+  const moonIcon = document.getElementById('theme-moon-icon');
+  const sunIcon = document.getElementById('theme-sun-icon');
+
+  const sidebarToggleBtn = document.getElementById('btn-sidebar-theme-toggle');
+  const sidebarMoonIcon = document.getElementById('sidebar-moon-icon');
+  const sidebarSunIcon = document.getElementById('sidebar-sun-icon');
+
+  const settingsDarkBtn = document.getElementById('theme-btn-dark');
+  const settingsLightBtn = document.getElementById('theme-btn-light');
+
+  function applyTheme(theme, notify = false, persistServer = true) {
+    const isDark = theme === 'dark';
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('canvas_horizon_theme', theme);
+
+    if (persistServer) {
+      api.post('/api/config', { theme }).catch(() => {});
+    }
+
+    // ヘッダーUI（アイコン切り替え ＆ ツールチップ更新）
+    if (moonIcon && sunIcon) {
+      moonIcon.style.display = isDark ? 'block' : 'none';
+      sunIcon.style.display = isDark ? 'none' : 'block';
+    }
+    if (headerToggleBtn) {
+      headerToggleBtn.setAttribute('title', isDark ? 'ライトモードに切り替え' : 'ダークモードに切り替え');
+    }
+
+    // サイドバーUI
+    if (sidebarMoonIcon && sidebarSunIcon) {
+      sidebarMoonIcon.style.display = isDark ? 'block' : 'none';
+      sidebarSunIcon.style.display = isDark ? 'none' : 'block';
+    }
+
+    // 設定画面のセグメント切り替えボタン
+    if (settingsDarkBtn && settingsLightBtn) {
+      settingsDarkBtn.classList.toggle('active', isDark);
+      settingsLightBtn.classList.toggle('active', !isDark);
+    }
+
+    if (notify) {
+      showToast(isDark ? '🌙 ダークモードに切り替えました' : '☀️ ライトモードに切り替えました');
+    }
+  }
+
+  window.applyAppTheme = applyTheme;
+
+  const savedTheme = localStorage.getItem('canvas_horizon_theme') || 'dark';
+  applyTheme(savedTheme, false, false);
+
+  if (headerToggleBtn) {
+    headerToggleBtn.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      applyTheme(current === 'dark' ? 'light' : 'dark', true);
+    });
+  }
+
+  if (sidebarToggleBtn) {
+    sidebarToggleBtn.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme');
+      applyTheme(current === 'dark' ? 'light' : 'dark', true);
+    });
+  }
+
+  if (settingsDarkBtn) {
+    settingsDarkBtn.addEventListener('click', () => {
+      applyTheme('dark', true);
+    });
+  }
+
+  if (settingsLightBtn) {
+    settingsLightBtn.addEventListener('click', () => {
+      applyTheme('light', true);
+    });
+  }
+}
+
+// 学期・クォーターの表示インジケーター更新
+function updateQuarterIndicators() {
+  const currentQ = state.currentQuarter || '';
+  const cfgSelect = document.getElementById('cfg-quarter');
+  if (cfgSelect && cfgSelect.value !== currentQ) {
+    cfgSelect.value = currentQ;
+  }
+}
+
+let isSyncing = false;
+let lastSyncTimestamp = 0;
+
+// アプリ全体の統合データ同期オーケストレーター
+async function syncAllData(forceRefresh = false) {
+  if (isSyncing) return;
+  isSyncing = true;
+
+  try {
+    await Promise.allSettled([
+      loadCourses(forceRefresh),
+      loadAllAssignments(forceRefresh),
+      (state.activeView === 'materials' && state.materialsCourseId) ? loadCourseMaterialsGrouped(state.materialsCourseId, forceRefresh) : Promise.resolve(),
+      (state.activeView === 'announcements') ? loadAnnouncements() : Promise.resolve()
+    ]);
+    lastSyncTimestamp = Date.now();
+  } finally {
+    isSyncing = false;
+  }
+}
+
+// 右上の更新ボタンによる同期実行（回転アニメーション＆データ同期）
+async function triggerRefresh(force = true) {
+  const refreshBtn = document.getElementById('btn-refresh');
+  if (refreshBtn && refreshBtn.classList.contains('spinning')) return;
+
+  if (refreshBtn) {
+    refreshBtn.classList.remove('success');
+    refreshBtn.classList.add('spinning');
+  }
+
+  const startTime = Date.now();
+
+  try {
+    await syncAllData(force);
+
+    const elapsed = Date.now() - startTime;
+    const waitRemaining = Math.max(0, 650 - elapsed);
+
+    setTimeout(() => {
+      if (refreshBtn) {
+        refreshBtn.classList.remove('spinning');
+        refreshBtn.classList.add('success');
+
+        setTimeout(() => {
+          refreshBtn.classList.remove('success');
+        }, 1500);
+      }
+    }, waitRemaining);
+
+  } catch (err) {
+    if (refreshBtn) refreshBtn.classList.remove('spinning');
+    console.error('Refresh sync error:', err);
+  }
+}
+
+// アプリケーション初期化・初期データ読み込み
+async function initApp() {
+  setupNavigation();
+  setupTheme();
+  setupModalEvents();
+  setupCommandPalette();
+  setupSettingsEvents();
+  setupDashboardFilterEvents();
+  setupMaterialsViewEvents();
+  downloadManager.init();
+
+  // 1. プロファイル・設定の取得 & 起動画面の決定
+  api.get('/api/me').then(meRes => {
+    const isConfigured = Boolean(
+      meRes.config?.isConfigured ||
+      (meRes.config?.baseUrl && (meRes.config?.hasToken || meRes.config?.apiToken))
+    );
+
+    if (meRes.success && meRes.profile) {
+      state.profile = meRes.profile;
+      state.config = meRes.config;
+      if (meRes.config && meRes.config.currentQuarter !== undefined) {
+        state.currentQuarter = meRes.config.currentQuarter;
+      }
+      if (meRes.config && meRes.config.theme) {
+        applyTheme(meRes.config.theme, false, false);
+      }
+      renderProfile(meRes.profile);
+      updateQuarterIndicators();
+
+      // 設定が入力されている場合は起動時に必ずホーム（課題画面）を表示
+      if (isConfigured) {
+        switchView('dashboard');
+        const welcomeBanner = document.getElementById('setting-welcome-banner');
+        if (welcomeBanner) welcomeBanner.style.display = 'none';
+      } else {
+        // 設定未完了の場合のみ設定画面に誘導
+        switchView('settings');
+        const welcomeBanner = document.getElementById('setting-welcome-banner');
+        if (welcomeBanner) welcomeBanner.style.display = 'flex';
+      }
+    } else {
+      // プロファイル取得に失敗・オフライン等の場合
+      if (isConfigured) {
+        switchView('dashboard');
+        const welcomeBanner = document.getElementById('setting-welcome-banner');
+        if (welcomeBanner) welcomeBanner.style.display = 'none';
+      } else {
+        switchView('settings');
+        const welcomeBanner = document.getElementById('setting-welcome-banner');
+        if (welcomeBanner) welcomeBanner.style.display = 'flex';
+      }
+    }
+  }).catch(async (err) => {
+    console.warn('Profile load deferred/cached:', err.message);
+    try {
+      const cfgRes = await api.get('/api/config');
+      if (cfgRes?.config?.baseUrl && cfgRes?.config?.apiToken) {
+        switchView('dashboard');
+        const welcomeBanner = document.getElementById('setting-welcome-banner');
+        if (welcomeBanner) welcomeBanner.style.display = 'none';
+        return;
+      }
+    } catch (_) {}
+    switchView('settings');
+    const welcomeBanner = document.getElementById('setting-welcome-banner');
+    if (welcomeBanner) welcomeBanner.style.display = 'flex';
+  });
+
+  // 自動アップデートリスナーの登録（Electron ネイティブ）
+  if (window.desktopAPI && typeof window.desktopAPI.onUpdateStatus === 'function') {
+    const banner = document.getElementById('header-update-banner');
+    const bannerText = document.getElementById('header-update-text');
+    const restartBtn = document.getElementById('btn-header-update-restart');
+
+    window.desktopAPI.onUpdateStatus((status) => {
+      if (!banner || !bannerText || !restartBtn) return;
+      if (status.type === 'available') {
+        bannerText.textContent = `新バージョン (${status.version}) をダウンロード中...`;
+        restartBtn.textContent = 'ダウンロード中...';
+        restartBtn.disabled = true;
+        banner.style.display = 'flex';
+      } else if (status.type === 'progress') {
+        bannerText.textContent = `更新ダウンロード中: ${status.percent}%`;
+        restartBtn.textContent = `${status.percent}%`;
+        restartBtn.disabled = true;
+        banner.style.display = 'flex';
+      } else if (status.type === 'downloaded') {
+        bannerText.textContent = `新バージョン (${status.version}) の準備が完了しました`;
+        restartBtn.textContent = '更新して再起動';
+        restartBtn.disabled = false;
+        banner.style.display = 'flex';
+        restartBtn.onclick = () => {
+          restartBtn.disabled = true;
+          restartBtn.textContent = '更新適用中...';
+          window.desktopAPI.quitAndInstall();
+        };
+      }
+    });
+  }
+
+  // アプリ起動時の自動更新確認（開いた瞬間にバックグラウンドで実行）
+  checkAppUpdates(false);
+
+  // 2. 右上のRefreshボタンのクリックイベント登録
+  const refreshBtn = document.getElementById('btn-refresh');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', () => triggerRefresh(true));
+  }
+
+  // 3. アプリ起動時の自動同期
+  setTimeout(() => {
+    triggerRefresh(true);
+  }, 120);
+
+  // 4. ウィンドウフォーカス復帰時 & 可視化時の自動同期
+  const onWindowActive = () => {
+    if (Date.now() - lastSyncTimestamp > 3 * 60 * 1000) {
+      triggerRefresh(false);
+    }
+  };
+  window.addEventListener('focus', onWindowActive);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') onWindowActive();
+  });
+
+  // 5. 定期バックグラウンド自動同期
+  setInterval(() => {
+    triggerRefresh(false);
+  }, 10 * 60 * 1000);
+}
+
+function renderProfile(profile) {
+  const defaultName = 'Canvas ユーザー';
+  let rawName = profile?.short_name || profile?.name || defaultName;
+
+  // 学籍番号やクラス識別コードなどの接頭辞（例: 'B08... 氏名'）を自動除去
+  let cleanName = rawName.replace(/^[A-Z0-9\-_]+[\s　]+/, '').trim();
+  if (!cleanName || cleanName.length < 2) cleanName = defaultName;
+
+  // 設定画面の連携状態表示カードを表示
+  const accountCard = document.getElementById('settings-account-card');
+  if (accountCard) {
+    accountCard.style.display = 'flex';
+  }
+
+  // 設定画面のアカウント名（連携済み 〇〇 としてログイン中）
+  const settingsNameEl = document.getElementById('settings-user-name');
+  if (settingsNameEl) {
+    settingsNameEl.innerHTML = `連携済み <strong>${utils.escapeHtml(cleanName)}</strong> としてログイン中`;
+  }
+}
+
+// コース一覧の読み込み
+async function loadCourses(forceRefresh = false) {
+  try {
+    const res = await api.get(`/api/courses?refresh=${forceRefresh}`);
+    if (res.success && res.courses) {
+      state.courses = res.courses;
+      renderSidebarCourses(res.courses);
+      populateMaterialCourseSelect(res.courses);
+    }
+  } catch (err) {
+    console.error('Failed to load courses:', err);
+  }
+}
+
+// サイドバーのコース一覧描画
+function renderSidebarCourses(courses) {
+  const list = document.getElementById('sidebar-courses-list');
+  const countPill = document.getElementById('sidebar-courses-count');
+  if (countPill && courses) {
+    countPill.textContent = courses.length;
+  }
+  const statCoursesVal = document.getElementById('stat-courses-val');
+  if (statCoursesVal && courses) {
+    statCoursesVal.textContent = courses.length;
+  }
+
+  list.innerHTML = '';
+
+  if (!courses || courses.length === 0) {
+    list.innerHTML = '<div style="color: var(--text-muted); padding: 12px; font-size: 12px;">科目がありません</div>';
+    return;
+  }
+
+  courses.forEach(c => {
+    const item = document.createElement('div');
+    // materials ビューを表示中かつ科目IDが一致する場合のみ active（起動時のダッシュボードでは未選択）
+    const isActive = (state.activeView === 'materials') && (String(state.materialsCourseId) === String(c.id));
+    item.className = `sidebar-course-item${isActive ? ' active' : ''}`;
+    item.dataset.courseId = c.id;
+    item.setAttribute('title', c.name);
+
+    const color = utils.getCourseColor(c.name || c.id);
+    // 科目ごとの未提出タスク数を集計
+    const pendingTasks = state.allAssignments ? state.allAssignments.filter(a => String(a.courseId) === String(c.id) && !a.isSubmitted) : [];
+    const pendingCount = pendingTasks.length;
+
+    item.innerHTML = `
+      <div class="sidebar-course-left">
+        <span class="course-color-dot ${color.dotClass}"></span>
+        <span class="sidebar-course-name">${c.cleanName || c.name}</span>
+      </div>
+      ${pendingCount > 0 ? `<span class="course-task-badge" title="未提出課題: ${pendingCount}件">${pendingCount}</span>` : ''}
+    `;
+
+    item.addEventListener('click', () => {
+      document.querySelectorAll('.sidebar-course-item').forEach(el => el.classList.remove('active'));
+      item.classList.add('active');
+
+      state.materialsCourseId = c.id;
+      const select = document.getElementById('material-course-select');
+      if (select) select.value = c.id;
+      switchView('materials');
+      loadCourseMaterialsGrouped(c.id);
+    });
+
+    list.appendChild(item);
+  });
+}
+
+function setupSidebarQuarterFilters() {
+  // サイドバーピルは廃止（設定画面で管理）
+}
+
+function populateMaterialCourseSelect(courses) {
+  const matSelect = document.getElementById('material-course-select');
+  matSelect.innerHTML = '';
+
+  courses.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.cleanName || c.name;
+    matSelect.appendChild(opt);
+  });
+
+  if (state.materialsCourseId) {
+    matSelect.value = state.materialsCourseId;
+  }
+}
+
+// 全課題タイムラインの読み込み
+async function loadAllAssignments(forceRefresh = false) {
+  try {
+    const res = await api.get(`/api/dashboard/timeline?refresh=${forceRefresh}`);
+    if (res.success && res.assignments) {
+      state.allAssignments = res.assignments;
+      updateAssignmentMetrics(res.assignments);
+      renderSidebarCourses(state.courses); // サイドバーの未提出課題バッジを同期
+      renderAssignmentsList();
+    }
+  } catch (err) {
+    console.error('Failed to load assignments:', err);
+    // 初回ロードで課題がまだ1件も表示されていない場合はスピナーを解除して再試行UIを表示
+    if (!state.allAssignments || state.allAssignments.length === 0) {
+      const list = document.getElementById('main-assignment-list');
+      if (list) {
+        list.innerHTML = `
+          <div class="empty-state-card">
+            <div class="empty-state-icon" style="color: var(--status-urgent, #f43f5e);">
+              <svg width="26" height="26" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            </div>
+            <div class="empty-state-title">課題データの同期に失敗しました</div>
+            <div class="empty-state-sub">${utils.escapeHtml(err.message || 'ネットワーク通信を確認してください')}</div>
+            <button class="btn-primary" style="margin-top: 14px; padding: 7px 20px; font-weight: 600;" id="btn-retry-assignments">再試行</button>
+          </div>
+        `;
+        document.getElementById('btn-retry-assignments')?.addEventListener('click', () => loadAllAssignments(true));
+      }
+    }
+  }
+}
+
+function updateAssignmentMetrics(assignments) {
+  const pending = assignments.filter(a => !a.isSubmitted && !a.isLocked);
+  const submitted = assignments.filter(a => a.isSubmitted);
+
+  const now = new Date();
+  const urgent = pending.filter(a => {
+    if (!a.dueAt) return false;
+    const due = new Date(a.dueAt);
+    const diffHours = (due - now) / (1000 * 60 * 60);
+    return diffHours >= -1 && diffHours <= 24;
+  });
+
+  document.getElementById('stat-urgent-val').textContent = urgent.length;
+  document.getElementById('stat-pending-val').textContent = pending.length;
+  document.getElementById('stat-completed-val').textContent = submitted.length;
+
+  const urgentBadge = document.getElementById('sidebar-urgent-count');
+  if (urgent.length > 0) {
+    urgentBadge.textContent = urgent.length;
+    urgentBadge.style.display = 'inline-block';
+  } else {
+    urgentBadge.style.display = 'none';
+  }
+}
+
+// KPIカードのアクティブ状態の同期
+function updateKpiActiveState() {
+  document.querySelectorAll('.kpi-card').forEach(el => el.classList.remove('active'));
+  if (state.assignmentFilter === 'urgent') {
+    document.getElementById('kpi-card-urgent')?.classList.add('active');
+  } else if (state.assignmentFilter === 'unsubmitted') {
+    document.getElementById('kpi-card-pending')?.classList.add('active');
+  } else if (state.assignmentFilter === 'submitted' || state.assignmentFilter === 'graded') {
+    document.getElementById('kpi-card-completed')?.classList.add('active');
+  }
+}
+
+function renderAssignmentsList() {
+  const list = document.getElementById('main-assignment-list');
+  list.innerHTML = '';
+
+  let filtered = [...state.allAssignments];
+
+  // 1. ステータスフィルター
+  if (state.assignmentFilter === 'unsubmitted') {
+    filtered = filtered.filter(a => !a.isSubmitted);
+  } else if (state.assignmentFilter === 'submitted') {
+    filtered = filtered.filter(a => a.isSubmitted && !a.isGraded);
+  } else if (state.assignmentFilter === 'graded') {
+    filtered = filtered.filter(a => a.isGraded);
+  } else if (state.assignmentFilter === 'urgent') {
+    // 24時間以内の課題
+    const now = new Date();
+    filtered = filtered.filter(a => {
+      if (a.isSubmitted || !a.dueAt) return false;
+      const due = new Date(a.dueAt);
+      const diffHours = (due - now) / (1000 * 60 * 60);
+      return diffHours >= -1 && diffHours <= 24;
+    });
+  }
+
+  // 2. 学期フィルター
+  if (state.onlyCurrentQuarterTasks && state.currentQuarter !== 'all') {
+    filtered = filtered.filter(a => a.isCurrentQuarter);
+  }
+
+  // 3. 検索キーワードフィルター
+  if (state.dashboardSearchQuery) {
+    const q = state.dashboardSearchQuery.toLowerCase();
+    filtered = filtered.filter(a => 
+      (a.name && a.name.toLowerCase().includes(q)) ||
+      (a.courseName && a.courseName.toLowerCase().includes(q)) ||
+      (a.cleanCourseName && a.cleanCourseName.toLowerCase().includes(q))
+    );
+  }
+
+  // 結果件数バッジの更新
+  const countBadge = document.getElementById('dashboard-results-count');
+  if (countBadge) {
+    countBadge.textContent = `${filtered.length}件`;
+  }
+
+  // KPIカードのアクティブ状態を反映
+  updateKpiActiveState();
+
+  if (filtered.length === 0) {
+    const qNote = state.onlyCurrentQuarterTasks ? ` (${state.currentQuarter}限定)` : '';
+    const searchNote = state.dashboardSearchQuery ? `「${state.dashboardSearchQuery}」に一致する` : '';
+    list.innerHTML = `
+      <div class="empty-state-card">
+        <div class="empty-state-icon">
+          <svg width="26" height="26" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        </div>
+        <div class="empty-state-title">${searchNote}表示対象の課題はありません${qNote}</div>
+        <div class="empty-state-sub">すべてのタスクが完了しているか、指定した条件に該当する課題がありません。</div>
+      </div>
+    `;
+    return;
+  }
+
+  // 4. ソート順
+  const sortMode = state.dashboardSort || 'due-asc';
+  if (sortMode === 'due-asc') {
+    filtered.sort((a, b) => {
+      if (!a.dueAt) return 1;
+      if (!b.dueAt) return -1;
+      return new Date(a.dueAt) - new Date(b.dueAt);
+    });
+  } else if (sortMode === 'due-desc') {
+    filtered.sort((a, b) => {
+      if (!a.dueAt) return 1;
+      if (!b.dueAt) return -1;
+      return new Date(b.dueAt) - new Date(a.dueAt);
+    });
+  } else if (sortMode === 'course') {
+    filtered.sort((a, b) => (a.courseName || '').localeCompare(b.courseName || '', 'ja'));
+  } else if (sortMode === 'points') {
+    filtered.sort((a, b) => (b.pointsPossible || 0) - (a.pointsPossible || 0));
+  }
+
+  // 5. スマートタイムライングルーピング描画
+  if (sortMode === 'due-asc' && !state.dashboardSearchQuery && state.assignmentFilter !== 'urgent') {
+    renderGroupedTimelineList(list, filtered);
+  } else {
+    // フラット描画
+    filtered.forEach(a => {
+      list.appendChild(createAssignmentCardElement(a));
+    });
+  }
+}
+
+// タイムラインセクション別グルーピング描画
+function renderGroupedTimelineList(container, assignments) {
+  const now = new Date();
+  const todayEnd = new Date();
+  todayEnd.setHours(23, 59, 59, 999);
+  const tomorrowEnd = new Date(todayEnd.getTime() + 24 * 60 * 60 * 1000);
+  const weekEnd = new Date(todayEnd.getTime() + 7 * 24 * 60 * 1000);
+
+  const groups = {
+    urgent: { title: '🔥 今日〜明日締切（要対応）', cls: 'urgent', items: [] },
+    thisWeek: { title: '📅 今週中の課題（7日以内）', cls: 'this-week', items: [] },
+    later: { title: '📌 来週以降の課題', cls: 'later', items: [] },
+    submitted: { title: '✅ 提出済み・採点済み', cls: 'submitted', items: [] },
+    noDue: { title: '⚪ 期限指定なし', cls: 'other', items: [] }
+  };
+
+  assignments.forEach(a => {
+    if (a.isSubmitted || a.isGraded) {
+      groups.submitted.items.push(a);
+      return;
+    }
+    if (!a.dueAt) {
+      groups.noDue.items.push(a);
+      return;
+    }
+    const due = new Date(a.dueAt);
+    if (due <= tomorrowEnd) {
+      groups.urgent.items.push(a);
+    } else if (due <= weekEnd) {
+      groups.thisWeek.items.push(a);
+    } else {
+      groups.later.items.push(a);
+    }
+  });
+
+  Object.values(groups).forEach(grp => {
+    if (grp.items.length === 0) return;
+
+    const header = document.createElement('div');
+    header.className = 'timeline-section-header';
+    header.innerHTML = `
+      <div class="timeline-section-title ${grp.cls}">
+        <span>${grp.title}</span>
+      </div>
+      <span class="timeline-count-pill">${grp.items.length}件</span>
+    `;
+    container.appendChild(header);
+
+    grp.items.forEach(a => {
+      container.appendChild(createAssignmentCardElement(a));
+    });
+  });
+}
+
+function createAssignmentCardElement(a) {
+  const card = document.createElement('div');
+  const urgency = utils.getDueUrgency(a.dueAt, a.isSubmitted);
+  const color = utils.getCourseColor(a.courseName || a.courseId);
+
+  let statusCls = urgency.level;
+  if (a.isGraded) statusCls = 'graded';
+  else if (a.isSubmitted) statusCls = 'submitted';
+
+  card.className = `assignment-card ${statusCls}`;
+  
+  const dueFormatted = utils.formatDate(a.dueAt);
+  const pointsBadge = a.pointsPossible ? `<span class="assignment-points">${a.pointsPossible} 点</span>` : '';
+
+  // 状態バッジ
+  let badgeHtml = '';
+  if (a.isGraded) {
+    badgeHtml = `<span class="badge badge-submitted">採点済み (${a.submission?.score ?? ''}点)</span>`;
+  } else if (a.isSubmitted) {
+    badgeHtml = '<span class="badge badge-submitted"><svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg> 提出済み</span>';
+  } else if (urgency.level === 'urgent') {
+    badgeHtml = `<span class="badge badge-urgent"><svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> ${urgency.text}</span>`;
+  } else if (urgency.level === 'pending') {
+    badgeHtml = `<span class="badge badge-pending">${urgency.text}</span>`;
+  }
+
+  // アクションボタン
+  const actionBtnHtml = a.isSubmitted
+    ? `<button class="btn-view-submission">詳細・再提出</button>`
+    : `<button class="btn-submit-action">
+        <span>提出する</span>
+        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+       </button>`;
+
+  const cleanCourse = a.cleanCourseName || a.courseName || '科目';
+
+  card.innerHTML = `
+    <div class="assignment-left">
+      <div class="assignment-title-row">
+        <span class="assignment-name">${a.name}</span>
+        ${badgeHtml}
+      </div>
+      <div class="assignment-meta-row">
+        <span class="assignment-course ${color.tagClass}" title="${a.courseName || ''}">
+          ${cleanCourse}
+        </span>
+        <span class="assignment-due-time">
+          <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+          ${dueFormatted}
+        </span>
+        ${pointsBadge}
+      </div>
+    </div>
+    <div class="assignment-right">
+      ${actionBtnHtml}
+    </div>
+  `;
+
+  card.addEventListener('click', () => {
+    openAssignmentModal(a);
+  });
+
+  return card;
+}
+
+// 課題フィルター・検索・KPIカードのイベント登録
+function setupDashboardFilterEvents() {
+  // ピルボタン（未提出、すべて、提出済み、採点済み）
+  document.querySelectorAll('#assignment-status-pills .pill-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#assignment-status-pills .pill-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.assignmentFilter = btn.dataset.filter;
+      renderAssignmentsList();
+    });
+  });
+
+  // 今期のみトグルボタン
+  const qBtn = document.getElementById('btn-toggle-current-q');
+  if (qBtn) {
+    qBtn.addEventListener('click', () => {
+      state.onlyCurrentQuarterTasks = !state.onlyCurrentQuarterTasks;
+      qBtn.classList.toggle('active', state.onlyCurrentQuarterTasks);
+      renderAssignmentsList();
+    });
+  }
+
+  // インライン検索
+  const searchInput = document.getElementById('dashboard-search-input');
+  const clearBtn = document.getElementById('btn-clear-dashboard-search');
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      state.dashboardSearchQuery = e.target.value.trim();
+      if (clearBtn) clearBtn.style.display = state.dashboardSearchQuery ? 'block' : 'none';
+      renderAssignmentsList();
+    });
+  }
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      searchInput.value = '';
+      state.dashboardSearchQuery = '';
+      clearBtn.style.display = 'none';
+      renderAssignmentsList();
+    });
+  }
+
+  // ソートセレクト
+  const sortSelect = document.getElementById('dashboard-sort-select');
+  if (sortSelect) {
+    sortSelect.addEventListener('change', (e) => {
+      state.dashboardSort = e.target.value;
+      renderAssignmentsList();
+    });
+  }
+
+  // KPIカードクリック時のフィルター連動
+  const kpiUrgent = document.getElementById('kpi-card-urgent');
+  if (kpiUrgent) {
+    kpiUrgent.addEventListener('click', () => {
+      document.querySelectorAll('#assignment-status-pills .pill-btn').forEach(b => b.classList.remove('active'));
+      state.assignmentFilter = 'urgent';
+      renderAssignmentsList();
+    });
+  }
+
+  const kpiPending = document.getElementById('kpi-card-pending');
+  if (kpiPending) {
+    kpiPending.addEventListener('click', () => {
+      document.querySelectorAll('#assignment-status-pills .pill-btn').forEach(b => b.classList.remove('active'));
+      document.querySelector('#assignment-status-pills .pill-btn[data-filter="unsubmitted"]')?.classList.add('active');
+      state.assignmentFilter = 'unsubmitted';
+      renderAssignmentsList();
+    });
+  }
+
+  const kpiCompleted = document.getElementById('kpi-card-completed');
+  if (kpiCompleted) {
+    kpiCompleted.addEventListener('click', () => {
+      document.querySelectorAll('#assignment-status-pills .pill-btn').forEach(b => b.classList.remove('active'));
+      document.querySelector('#assignment-status-pills .pill-btn[data-filter="submitted"]')?.classList.add('active');
+      state.assignmentFilter = 'submitted';
+      renderAssignmentsList();
+    });
+  }
+
+  const kpiCourses = document.getElementById('kpi-card-courses');
+  if (kpiCourses) {
+    kpiCourses.addEventListener('click', () => {
+      switchView('materials');
+    });
+  }
+}
+
+// 課題詳細・提出モーダル
+function switchSubmissionTab(tabKey) {
+  document.querySelectorAll('.sub-tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tabKey);
+  });
+  const up = document.getElementById('tab-content-upload');
+  const txt = document.getElementById('tab-content-text');
+  const url = document.getElementById('tab-content-url');
+  if (up) up.style.display = tabKey === 'upload' ? 'block' : 'none';
+  if (txt) txt.style.display = tabKey === 'text' ? 'block' : 'none';
+  if (url) url.style.display = tabKey === 'url' ? 'block' : 'none';
+}
+
+function openAssignmentModal(assignment) {
+  state.currentModalAssignment = assignment;
+  state.filesQueue = [];
+
+  document.getElementById('modal-course-name').textContent = assignment.courseName || '';
+  document.getElementById('modal-assignment-title').textContent = assignment.name || '課題';
+  document.getElementById('modal-due-date').textContent = utils.formatDate(assignment.dueAt);
+  document.getElementById('modal-points').textContent = assignment.pointsPossible ? `${assignment.pointsPossible} 点` : 'なし';
+
+  const statusEl = document.getElementById('modal-status-badge');
+  if (assignment.isGraded) {
+    statusEl.innerHTML = `<span class="badge badge-submitted">採点済み (${assignment.submission.grade || assignment.submission.score}点)</span>`;
+  } else if (assignment.isSubmitted) {
+    statusEl.innerHTML = `<span class="badge badge-submitted">提出済み (${utils.formatDate(assignment.submission.submittedAt)})</span>`;
+  } else if (assignment.isLocked) {
+    statusEl.innerHTML = `<span class="badge badge-locked">ロック中</span>`;
+  } else {
+    statusEl.innerHTML = `<span class="badge badge-pending">未提出</span>`;
+  }
+
+  const types = assignment.submissionTypes || [];
+  const readableTypes = [];
+  if (types.includes('online_upload')) readableTypes.push('ファイル提出');
+  if (types.includes('online_text_entry')) readableTypes.push('テキスト記述');
+  if (types.includes('online_url')) readableTypes.push('Web URL');
+  if (types.includes('online_quiz')) readableTypes.push('アンケート/小テスト');
+  if (types.includes('on_paper')) readableTypes.push('対面提出');
+  if (types.includes('none')) readableTypes.push('提出不要');
+
+  document.getElementById('modal-allowed-types').textContent = readableTypes.length > 0 ? readableTypes.join(' / ') : (types.join(', ') || 'なし');
+
+  const descBox = document.getElementById('modal-description-box');
+  if (assignment.description && assignment.description.trim()) {
+    descBox.innerHTML = utils.formatHtmlWithLinks(assignment.description);
+  } else {
+    descBox.innerHTML = '<span style="color: var(--text-muted);">説明なし</span>';
+  }
+
+  // 提出可能なフォーマットの判定
+  const canUpload = types.includes('online_upload');
+  const canText = types.includes('online_text_entry');
+  const canUrl = types.includes('online_url');
+  const isQuiz = types.includes('online_quiz');
+
+  const tabsContainer = document.getElementById('modal-submission-tabs');
+  const quizNotice = document.getElementById('modal-quiz-notice');
+  const extNotice = document.getElementById('modal-external-notice');
+  const tabUploadBtn = document.getElementById('sub-tab-upload');
+  const tabTextBtn = document.getElementById('sub-tab-text');
+  const tabUrlBtn = document.getElementById('sub-tab-url');
+
+  const onlineTypesCount = (canUpload ? 1 : 0) + (canText ? 1 : 0) + (canUrl ? 1 : 0);
+
+  if (onlineTypesCount > 0) {
+    quizNotice.style.display = 'none';
+    extNotice.style.display = 'none';
+    tabsContainer.style.display = 'flex';
+
+    tabUploadBtn.style.display = canUpload ? 'inline-flex' : 'none';
+    tabTextBtn.style.display = canText ? 'inline-flex' : 'none';
+    tabUrlBtn.style.display = canUrl ? 'inline-flex' : 'none';
+
+    // 利用可能な最初の提出タブをデフォルト選択
+    const defaultTab = canUpload ? 'upload' : (canText ? 'text' : 'url');
+    switchSubmissionTab(defaultTab);
+  } else if (isQuiz) {
+    tabsContainer.style.display = 'none';
+    extNotice.style.display = 'none';
+    quizNotice.style.display = 'block';
+    const quizLink = document.getElementById('btn-open-canvas-quiz');
+    const quizUrl = assignment.htmlUrl || '#';
+    quizLink.href = quizUrl;
+    quizLink.setAttribute('data-url', assignment.htmlUrl || '');
+    document.getElementById('tab-content-upload').style.display = 'none';
+    document.getElementById('tab-content-text').style.display = 'none';
+    document.getElementById('tab-content-url').style.display = 'none';
+  } else {
+    tabsContainer.style.display = 'none';
+    quizNotice.style.display = 'none';
+    extNotice.style.display = 'block';
+    const extLink = document.getElementById('btn-open-canvas-external');
+    const extUrl = assignment.htmlUrl || '#';
+    extLink.href = extUrl;
+    extLink.setAttribute('data-url', assignment.htmlUrl || '');
+    document.getElementById('tab-content-upload').style.display = 'none';
+    document.getElementById('tab-content-text').style.display = 'none';
+    document.getElementById('tab-content-url').style.display = 'none';
+  }
+
+  // 過去の提出済みファイル一覧（保持・マージ提出対応）
+  const historySec = document.getElementById('modal-history-section');
+  const historyGrid = document.getElementById('modal-history-files-list');
+  historyGrid.innerHTML = '';
+
+  if (assignment.submission && assignment.submission.attachments && assignment.submission.attachments.length > 0) {
+    historySec.style.display = 'flex';
+    document.getElementById('modal-history-count').textContent = `${assignment.submission.attachments.length}件`;
+
+    assignment.submission.attachments.forEach(att => {
+      const item = document.createElement('div');
+      item.className = 'history-file-row';
+      item.innerHTML = `
+        <div class="history-file-left">
+          <label class="history-file-checkbox-label" title="チェックしたファイルは再提出時も保持されます">
+            <input type="checkbox" class="retain-file-checkbox" data-file-id="${att.id}" checked>
+            <span class="file-icon-badge">${utils.getFileExt(att.displayName)}</span>
+            <span class="history-file-name" title="${att.displayName}">${att.displayName}</span>
+          </label>
+        </div>
+        <div class="history-file-actions">
+          <button class="action-chip-btn preview-file-btn" title="ファイル内容をプレビュー">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+            <span>プレビュー</span>
+          </button>
+          <a class="action-chip-btn" href="/api/files/download?url=${encodeURIComponent(att.url)}&name=${encodeURIComponent(att.displayName)}" download="${att.displayName}" title="ファイルをローカル保存">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            <span>保存</span>
+          </a>
+        </div>
+      `;
+
+      item.querySelector('.preview-file-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        openPdfPreviewModal(att.url, att.displayName);
+      });
+
+      item.querySelector('.retain-file-checkbox').addEventListener('change', () => {
+        renderFileQueue();
+      });
+
+      historyGrid.appendChild(item);
+    });
+
+    document.getElementById('btn-download-submission-zip').onclick = () => {
+      downloadFilesToFolder(assignment.submission.attachments.map(att => ({
+        url: att.url,
+        name: att.displayName
+      })), `${assignment.name} 提出ファイル`, `${assignment.name}_提出ファイル`);
+    };
+  } else {
+    historySec.style.display = 'none';
+  }
+
+  // 入力欄のリセットおよび過去のテキスト提出内容の復元
+  document.getElementById('modal-submission-comment').value = '';
+  document.getElementById('modal-text-comment').value = '';
+  document.getElementById('modal-url-entry-url').value = '';
+  document.getElementById('modal-url-comment').value = '';
+  document.getElementById('modal-upload-progress').classList.remove('active');
+
+  const charCountBadge = document.getElementById('modal-text-char-count');
+  if (assignment.submission && assignment.submission.body) {
+    const rawText = utils.stripHtml(assignment.submission.body);
+    document.getElementById('modal-text-entry-body').value = rawText;
+    if (charCountBadge) charCountBadge.textContent = `${rawText.length.toLocaleString()} 文字`;
+  } else {
+    document.getElementById('modal-text-entry-body').value = '';
+    if (charCountBadge) charCountBadge.textContent = '0 文字';
+  }
+
+  renderFileQueue();
+  // モーダルを全画面表示で展開
+  toggleAssignmentFullscreen(true);
+  document.getElementById('assignment-modal').classList.add('open');
+}
+
+let isAssignmentFullscreen = false;
+let isEditorWide = false;
+
+// モーダルの全画面化ヘルパー
+function toggleModalFullscreen(containerId, expandIconId, compressIconId, forceState) {
+  const container = document.getElementById(containerId);
+  const expandIcon = document.getElementById(expandIconId);
+  const compressIcon = document.getElementById(compressIconId);
+  if (!container) return false;
+
+  const isFs = container.classList.contains('fullscreen');
+  const nextFs = (typeof forceState === 'boolean') ? forceState : !isFs;
+
+  if (nextFs) {
+    container.classList.add('fullscreen');
+    if (expandIcon) expandIcon.style.display = 'none';
+    if (compressIcon) compressIcon.style.display = 'block';
+  } else {
+    container.classList.remove('fullscreen');
+    if (expandIcon) expandIcon.style.display = 'block';
+    if (compressIcon) compressIcon.style.display = 'none';
+  }
+  return nextFs;
+}
+
+function toggleAssignmentFullscreen(forceState) {
+  isAssignmentFullscreen = toggleModalFullscreen('assignment-modal-container', 'assignment-expand-icon', 'assignment-compress-icon', forceState);
+}
+
+// 執筆ワイドモードの切り替え
+function toggleEditorWide(forceState) {
+  const grid = document.querySelector('.assignment-modal-grid');
+  const iconExpand = document.getElementById('editor-wide-icon-expand');
+  const iconCollapse = document.getElementById('editor-wide-icon-collapse');
+  const quickWideText = document.getElementById('btn-quick-wide-text');
+  if (!grid) return;
+
+  isEditorWide = (typeof forceState === 'boolean') ? forceState : !isEditorWide;
+
+  if (isEditorWide) {
+    grid.classList.add('editor-wide');
+    if (iconExpand) iconExpand.style.display = 'none';
+    if (iconCollapse) iconCollapse.style.display = 'block';
+    if (quickWideText) quickWideText.textContent = '標準幅に戻す';
+  } else {
+    grid.classList.remove('editor-wide');
+    if (iconExpand) iconExpand.style.display = 'block';
+    if (iconCollapse) iconCollapse.style.display = 'none';
+    if (quickWideText) quickWideText.textContent = '執筆ワイド表示';
+  }
+}
+
+function closeAssignmentModal() {
+  document.getElementById('assignment-modal').classList.remove('open');
+  if (isAssignmentFullscreen) {
+    toggleAssignmentFullscreen(false);
+  }
+  if (isEditorWide) {
+    toggleEditorWide(false);
+  }
+  state.currentModalAssignment = null;
+  state.filesQueue = [];
+}
+
+function setupModalEvents() {
+  document.getElementById('modal-close-btn').addEventListener('click', closeAssignmentModal);
+  
+  const assignFsBtn = document.getElementById('assignment-modal-fullscreen-btn');
+  if (assignFsBtn) {
+    assignFsBtn.addEventListener('click', () => toggleAssignmentFullscreen());
+  }
+
+  const editorWideBtn = document.getElementById('btn-toggle-editor-wide');
+  if (editorWideBtn) {
+    editorWideBtn.addEventListener('click', () => toggleEditorWide());
+  }
+
+  const quickWideBtn = document.getElementById('btn-quick-wide-toggle');
+  if (quickWideBtn) {
+    quickWideBtn.addEventListener('click', () => toggleEditorWide());
+  }
+
+  // リアルタイム文字数カウント & Ctrl+Enter 提出ショートカット
+  const textEditor = document.getElementById('modal-text-entry-body');
+  const charCountBadge = document.getElementById('modal-text-char-count');
+  if (textEditor && charCountBadge) {
+    textEditor.addEventListener('input', () => {
+      const len = textEditor.value.length;
+      charCountBadge.textContent = `${len.toLocaleString()} 文字`;
+    });
+
+    textEditor.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        executeTextSubmission();
+      }
+    });
+  }
+
+  // クイズおよび外部URL課題の安全なブラウザ起動
+  const quizLink = document.getElementById('btn-open-canvas-quiz');
+  if (quizLink) {
+    quizLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      const url = quizLink.getAttribute('data-url') || quizLink.href;
+      if (url && url !== '#') {
+        utils.openExternalUrl(url);
+      }
+    });
+  }
+
+  const extLink = document.getElementById('btn-open-canvas-external');
+  if (extLink) {
+    extLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      const url = extLink.getAttribute('data-url') || extLink.href;
+      if (url && url !== '#') {
+        utils.openExternalUrl(url);
+      }
+    });
+  }
+
+  document.getElementById('assignment-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'assignment-modal') closeAssignmentModal();
+  });
+
+  // 提出形式タブの切り替え
+  document.querySelectorAll('.sub-tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      switchSubmissionTab(btn.dataset.tab);
+    });
+  });
+
+  // ファイルアップロードのイベント登録
+  const dropzone = document.getElementById('bulk-dropzone');
+  const fileInput = document.getElementById('bulk-file-input');
+
+  dropzone.addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      addFilesToQueue(Array.from(e.target.files));
+      fileInput.value = '';
+    }
+  });
+
+  ['dragenter', 'dragover'].forEach(eventName => {
+    dropzone.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.add('dragover');
+    });
+  });
+
+  ['dragleave', 'drop'].forEach(eventName => {
+    dropzone.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.remove('dragover');
+    });
+  });
+
+  dropzone.addEventListener('drop', (e) => {
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      addFilesToQueue(Array.from(e.dataTransfer.files));
+    }
+  });
+
+  // 提出実行ボタンのイベント登録
+  document.getElementById('btn-execute-submit').addEventListener('click', executeBulkSubmission);
+  document.getElementById('btn-execute-text-submit').addEventListener('click', executeTextSubmission);
+  document.getElementById('btn-execute-url-submit').addEventListener('click', executeUrlSubmission);
+}
+
+function addFilesToQueue(newFiles) {
+  newFiles.forEach(nf => {
+    if (!state.filesQueue.some(f => f.name === nf.name && f.size === nf.size)) {
+      state.filesQueue.push(nf);
+    }
+  });
+  renderFileQueue();
+}
+
+function removeFileFromQueue(index) {
+  state.filesQueue.splice(index, 1);
+  renderFileQueue();
+}
+
+function renderFileQueue() {
+  const container = document.getElementById('modal-files-queue');
+  const submitBtn = document.getElementById('btn-execute-submit');
+
+  const retainedCheckboxes = Array.from(document.querySelectorAll('.retain-file-checkbox:checked'));
+  const retainCount = retainedCheckboxes.length;
+  const newFilesCount = state.filesQueue.length;
+
+  if (newFilesCount === 0) {
+    container.style.display = 'none';
+    container.innerHTML = '';
+
+    if (retainCount > 0) {
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = `
+        <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+        保持ファイル (${retainCount}件) で提出
+      `;
+    } else {
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = `
+        <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+        ファイルを選択してください
+      `;
+    }
+    return;
+  }
+
+  container.style.display = 'flex';
+  container.innerHTML = '';
+  submitBtn.disabled = false;
+
+  const submitLabel = retainCount > 0
+    ? `${newFilesCount}個のファイルを追加 (${retainCount}件保持)`
+    : `${newFilesCount}個のファイルを提出`;
+
+  submitBtn.innerHTML = `
+    <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+    ${submitLabel}
+  `;
+
+  state.filesQueue.forEach((file, idx) => {
+    const item = document.createElement('div');
+    item.className = 'file-queue-item';
+    item.innerHTML = `
+      <div class="file-queue-left">
+        <span class="file-icon-badge">${utils.getFileExt(file.name)}</span>
+        <span class="file-queue-name" title="${file.name}">${file.name}</span>
+        <span class="file-queue-size">(${utils.formatBytes(file.size)})</span>
+      </div>
+      <button class="remove-file-btn" title="削除">
+        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    `;
+    item.querySelector('.remove-file-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      removeFileFromQueue(idx);
+    });
+    container.appendChild(item);
+  });
+}
+
+// 1. ファイルアップロード提出（過去ファイルの保持・マージ提出対応）
+async function executeBulkSubmission() {
+  const retainedCheckboxes = Array.from(document.querySelectorAll('.retain-file-checkbox:checked'));
+  const retainFileIds = retainedCheckboxes.map(cb => cb.dataset.fileId);
+
+  if (!state.currentModalAssignment || (state.filesQueue.length === 0 && retainFileIds.length === 0) || state.isSubmitting) {
+    return;
+  }
+
+  const assignment = state.currentModalAssignment;
+  const courseId = assignment.courseId;
+  const assignmentId = assignment.id;
+  const comment = document.getElementById('modal-submission-comment').value;
+
+  state.isSubmitting = true;
+  const submitBtn = document.getElementById('btn-execute-submit');
+  const progressContainer = document.getElementById('modal-upload-progress');
+  const progressBar = document.getElementById('modal-progress-bar');
+  const progressText = document.getElementById('modal-progress-status');
+  const progressPercent = document.getElementById('modal-progress-percentage');
+
+  submitBtn.disabled = true;
+  progressContainer.classList.add('active');
+  progressBar.style.width = '15%';
+  progressText.textContent = `Canvasへ送信中...`;
+  progressPercent.textContent = '15%';
+
+  try {
+    const formData = new FormData();
+    state.filesQueue.forEach(file => {
+      formData.append('files', file);
+    });
+    formData.append('comment', comment);
+    formData.append('retainFileIds', JSON.stringify(retainFileIds));
+
+    let cur = 20;
+    const progressTimer = setInterval(() => {
+      if (cur < 85) {
+        cur += 15;
+        progressBar.style.width = `${cur}%`;
+        progressPercent.textContent = `${cur}%`;
+      }
+    }, 350);
+
+    const res = await api.post(`/api/courses/${courseId}/assignments/${assignmentId}/submit-files`, formData, true);
+    clearInterval(progressTimer);
+
+    if (res.success) {
+      progressBar.style.width = '100%';
+      progressPercent.textContent = '100%';
+      progressText.textContent = '提出完了';
+
+      const totalCount = res.result ? res.result.totalCount : (state.filesQueue.length + retainFileIds.length);
+      showToast(`課題を提出しました（合計 ${totalCount} 件）`, 'success');
+      triggerConfetti();
+
+      await loadAllAssignments(true);
+      if (state.materialsCourseId) loadCourseMaterialsGrouped(state.materialsCourseId, true);
+      setTimeout(() => {
+        closeAssignmentModal();
+      }, 1200);
+    } else {
+      throw new Error(res.error || '提出に失敗しました');
+    }
+  } catch (err) {
+    console.error('Submission failed:', err);
+    showToast(`提出エラー: ${err.message}`, 'error');
+    progressContainer.classList.remove('active');
+    submitBtn.disabled = false;
+  } finally {
+    state.isSubmitting = false;
+  }
+}
+
+// 2. テキスト記述入力提出
+async function executeTextSubmission() {
+  if (!state.currentModalAssignment || state.isSubmitting) return;
+
+  const textBody = document.getElementById('modal-text-entry-body').value.trim();
+  const commentText = document.getElementById('modal-text-comment').value.trim();
+
+  if (!textBody) {
+    showToast('提出する本文テキストを入力してください', 'error');
+    return;
+  }
+
+  const assignment = state.currentModalAssignment;
+  const courseId = assignment.courseId;
+  const assignmentId = assignment.id;
+  const submitBtn = document.getElementById('btn-execute-text-submit');
+
+  state.isSubmitting = true;
+  submitBtn.disabled = true;
+  const origHtml = submitBtn.innerHTML;
+  submitBtn.innerHTML = '<span>送信中...</span>';
+
+  try {
+    const res = await api.post(`/api/courses/${courseId}/assignments/${assignmentId}/submit-text`, {
+      submissionType: 'online_text_entry',
+      body: textBody,
+      commentText
+    });
+
+    if (res.success) {
+      showToast('テキスト課題の提出が完了しました', 'success');
+      triggerConfetti();
+      await loadAllAssignments(true);
+      if (state.materialsCourseId) loadCourseMaterialsGrouped(state.materialsCourseId, true);
+      setTimeout(() => {
+        closeAssignmentModal();
+      }, 1200);
+    } else {
+      throw new Error(res.error || '提出に失敗しました');
+    }
+  } catch (err) {
+    console.error('Text submission failed:', err);
+    showToast(`提出エラー: ${err.message}`, 'error');
+  } finally {
+    state.isSubmitting = false;
+    submitBtn.disabled = false;
+    submitBtn.innerHTML = origHtml;
+  }
+}
+
+// 3. Web URL提出
+async function executeUrlSubmission() {
+  if (!state.currentModalAssignment || state.isSubmitting) return;
+
+  const inputUrl = document.getElementById('modal-url-entry-url').value.trim();
+  const commentText = document.getElementById('modal-url-comment').value.trim();
+
+  if (!inputUrl) {
+    showToast('提出先URLを入力してください', 'error');
+    return;
+  }
+
+  if (!inputUrl.startsWith('http://') && !inputUrl.startsWith('https://')) {
+    showToast('URLは http:// または https:// で入力してください', 'error');
+    return;
+  }
+
+  const assignment = state.currentModalAssignment;
+  const courseId = assignment.courseId;
+  const assignmentId = assignment.id;
+  const submitBtn = document.getElementById('btn-execute-url-submit');
+
+  state.isSubmitting = true;
+  submitBtn.disabled = true;
+  const origHtml = submitBtn.innerHTML;
+  submitBtn.innerHTML = '<span>送信中...</span>';
+
+  try {
+    const res = await api.post(`/api/courses/${courseId}/assignments/${assignmentId}/submit-text`, {
+      submissionType: 'online_url',
+      url: inputUrl,
+      commentText
+    });
+
+    if (res.success) {
+      showToast('URL課題の提出が完了しました', 'success');
+      triggerConfetti();
+      await loadAllAssignments(true);
+      if (state.materialsCourseId) loadCourseMaterialsGrouped(state.materialsCourseId, true);
+      setTimeout(() => {
+        closeAssignmentModal();
+      }, 1200);
+    } else {
+      throw new Error(res.error || '提出に失敗しました');
+    }
+  } catch (err) {
+    console.error('URL submission failed:', err);
+    showToast(`提出エラー: ${err.message}`, 'error');
+  } finally {
+    state.isSubmitting = false;
+    submitBtn.disabled = false;
+    submitBtn.innerHTML = origHtml;
+  }
+}
+
+// 授業回（モジュール）ごとの資料表示
+document.getElementById('material-course-select').addEventListener('change', (e) => {
+  state.materialsCourseId = e.target.value;
+  loadCourseMaterialsGrouped(e.target.value);
+});
+
+// 講義資料画面の初期化イベント（リアルタイム検索 & すべて折りたたむ）
+let areAllModulesCollapsed = false;
+function setupMaterialsViewEvents() {
+  const toggleAllBtn = document.getElementById('btn-toggle-all-modules');
+  const toggleAllLabel = document.getElementById('btn-toggle-all-label');
+
+  if (toggleAllBtn) {
+    toggleAllBtn.addEventListener('click', () => {
+      areAllModulesCollapsed = !areAllModulesCollapsed;
+      document.querySelectorAll('.module-group').forEach(grp => {
+        grp.classList.toggle('collapsed', areAllModulesCollapsed);
+      });
+      if (toggleAllLabel) {
+        toggleAllLabel.textContent = areAllModulesCollapsed ? 'すべて展開する' : 'すべて折りたたむ';
+      }
+    });
+  }
+
+  const searchInput = document.getElementById('materials-search-input');
+  const clearBtn = document.getElementById('btn-clear-materials-search');
+
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      const q = e.target.value.toLowerCase().trim();
+      if (clearBtn) clearBtn.style.display = q ? 'block' : 'none';
+      filterMaterialsInDom(q);
+    });
+  }
+
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      searchInput.value = '';
+      clearBtn.style.display = 'none';
+      filterMaterialsInDom('');
+    });
+  }
+}
+
+function filterMaterialsInDom(query) {
+  const groups = document.querySelectorAll('.module-group');
+  groups.forEach(group => {
+    const titleText = group.querySelector('.module-group-title span')?.textContent.toLowerCase() || '';
+    const cards = group.querySelectorAll('.module-file-card');
+    let hasMatch = false;
+
+    cards.forEach(card => {
+      const cardTitle = card.querySelector('.module-file-title')?.textContent.toLowerCase() || '';
+      const cardMeta = card.querySelector('.module-file-meta')?.textContent.toLowerCase() || '';
+      const matches = !query || cardTitle.includes(query) || cardMeta.includes(query) || titleText.includes(query);
+      card.style.display = matches ? 'flex' : 'none';
+      if (matches) hasMatch = true;
+    });
+
+    group.style.display = (!query || hasMatch || titleText.includes(query)) ? 'block' : 'none';
+    if (query && hasMatch) {
+      group.classList.remove('collapsed');
+    }
+  });
+}
+
+async function loadCourseMaterialsGrouped(courseId, forceRefresh = false) {
+  if (!courseId) return;
+  const container = document.getElementById('grouped-modules-container');
+  container.innerHTML = `
+    <div class="loading-state-card" style="padding: 36px 20px;">
+      <div class="spinner-ring"></div>
+      <span style="font-weight: 600; color: var(--text-secondary);">講義資料を同期中...</span>
+    </div>
+  `;
+
+  try {
+    const res = await api.get(`/api/courses/${courseId}/materials-grouped?refresh=${forceRefresh}`);
+    if (res.success && res.modules) {
+      state.groupedMaterials = res.modules;
+      renderGroupedMaterials(res.modules);
+    }
+  } catch (err) {
+    container.innerHTML = `<div style="color: var(--status-urgent); padding: 24px;">資料取得エラー: ${err.message}</div>`;
+  }
+}
+
+function renderGroupedMaterials(modules) {
+  const container = document.getElementById('grouped-modules-container');
+  container.innerHTML = '';
+
+  if (modules.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state-card">
+        <div class="empty-state-icon">
+          <svg width="26" height="26" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        </div>
+        <div class="empty-state-title">公開された講義資料はありません</div>
+        <div class="empty-state-sub">この科目のモジュールにはまだPDFや資料が追加されていないか、非公開に設定されています。</div>
+      </div>
+    `;
+    return;
+  }
+
+  // 検索入力欄があれば値を引き継いでフィルタ
+  const searchInput = document.getElementById('materials-search-input');
+  const currentQuery = searchInput ? searchInput.value.toLowerCase().trim() : '';
+
+  modules.forEach(m => {
+    const group = document.createElement('div');
+    group.className = 'module-group';
+
+    const fileItems = m.items.filter(it => it.type === 'File');
+
+    group.innerHTML = `
+      <div class="module-group-header">
+        <div class="module-group-title">
+          <svg class="module-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/></svg>
+          <span>${m.name}</span>
+          <span class="module-items-badge">${m.items.length}件</span>
+        </div>
+        ${fileItems.length > 0 ? `
+          <button class="action-chip-btn btn-zip-module" style="font-weight: 700; color: #38bdf8; border-color: rgba(56, 189, 248, 0.35);" title="選択したフォルダにこの回の資料をまとめて保存します">
+            <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            この回の資料を保存 (${fileItems.length}件)
+          </button>
+        ` : ''}
+      </div>
+      <div class="module-files-grid"></div>
+    `;
+
+    // モジュールヘッダーのクリックによるアコーディオン開閉
+    const header = group.querySelector('.module-group-header');
+    header.addEventListener('click', (e) => {
+      // 資料保存ボタンをクリックした場合は開閉させない
+      if (e.target.closest('.btn-zip-module')) return;
+      group.classList.toggle('collapsed');
+    });
+
+    if (fileItems.length > 0) {
+      const zipBtn = group.querySelector('.btn-zip-module');
+      zipBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const origContent = zipBtn.innerHTML;
+        zipBtn.disabled = true;
+        zipBtn.innerHTML = `
+          <svg class="spin" width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          準備中...
+        `;
+        try {
+          await downloadFilesToFolder(fileItems.map(f => ({
+            id: f.id,
+            name: f.displayName || f.title,
+            url: f.url,
+            courseId: f.courseId || state.materialsCourseId
+          })), `${m.name} 資料`, m.name);
+        } finally {
+          zipBtn.disabled = false;
+          zipBtn.innerHTML = origContent;
+        }
+      });
+    }
+
+    const grid = group.querySelector('.module-files-grid');
+
+    m.items.forEach(it => {
+      const isFile = it.type === 'File';
+      const isPage = it.type === 'Page';
+      const isAssignment = it.type === 'Assignment';
+      const isExternal = it.type === 'ExternalUrl';
+      const isQuiz = it.type === 'Quiz';
+
+      const isPdf = isFile && ((it.displayName && it.displayName.toLowerCase().endsWith('.pdf')) || (it.title && it.title.toLowerCase().endsWith('.pdf')));
+      const title = it.displayName || it.title;
+      const directDownloadUrl = it.id ? `/api/files/download?id=${it.id}&name=${encodeURIComponent(title)}` : null;
+
+      const card = document.createElement('div');
+      card.className = 'module-file-card';
+
+      const ytId = isExternal ? utils.extractYouTubeVideoId(it.url || it.htmlUrl) : null;
+
+      // アイコンの選定
+      let iconHtml = '';
+      let iconClass = 'other';
+
+      // 提出状況の判定
+      let isAssignmentSubmitted = false;
+      let matchingAssign = null;
+      if (isAssignment) {
+        matchingAssign = (state.allAssignments || []).find(a => 
+          (it.contentId && String(a.id) === String(it.contentId)) ||
+          (it.assignmentId && String(a.id) === String(it.assignmentId)) ||
+          (it.id && String(a.id) === String(it.id)) ||
+          (a.name && (a.name.trim() === title.trim() || a.name.includes(title) || title.includes(a.name)))
+        );
+
+        isAssignmentSubmitted = Boolean(
+          it.isSubmitted ||
+          matchingAssign?.isSubmitted ||
+          (matchingAssign?.submission && (matchingAssign.submission.workflowState === 'submitted' || matchingAssign.submission.workflowState === 'graded')) ||
+          (it.submission && (it.submission.workflowState === 'submitted' || it.submission.workflowState === 'graded'))
+        );
+      }
+
+      if (isPdf) {
+        iconClass = 'pdf';
+        iconHtml = '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>';
+      } else if (isQuiz) {
+        iconClass = 'quiz';
+        iconHtml = '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
+      } else if (isPage) {
+        iconClass = 'page';
+        iconHtml = '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>';
+      } else if (isAssignment) {
+        iconClass = 'assignment';
+        iconHtml = '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>';
+      } else if (ytId) {
+        iconClass = 'video';
+        iconHtml = '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
+      } else if (isExternal) {
+        iconClass = 'other';
+        iconHtml = '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>';
+      } else {
+        iconClass = 'other';
+        iconHtml = '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>';
+      }
+
+      // サブテキストの表示（締切・配点）
+      let metaHtml = '';
+      if (isAssignment) {
+        const assignData = matchingAssign || it;
+        const dueAt = assignData.dueAt;
+        const pointsPossible = assignData.pointsPossible;
+        const pointsText = (typeof pointsPossible === 'number') ? `${pointsPossible}点` : '';
+        const dueText = dueAt ? utils.formatDate(dueAt) : null;
+
+        if (isAssignmentSubmitted) {
+          // ステータスタグの表示判定
+          const parts = [];
+          if (dueText) parts.push(`締切: ${dueText}`);
+          if (pointsText) parts.push(pointsText);
+          metaHtml = parts.length > 0 ? `<span>${parts.join(' ・ ')}</span>` : `<span>課題</span>`;
+        } else if (dueText) {
+          const urgency = utils.getDueUrgency(dueAt, false);
+          const chipClass = urgency.level === 'urgent' ? 'due-urgent' : 'due-normal';
+          metaHtml = `<span class="meta-chip ${chipClass}">締切: ${dueText}</span>${pointsText ? `<span>${pointsText}</span>` : ''}`;
+        } else if (pointsText) {
+          metaHtml = `<span>配点: ${pointsText}</span>`;
+        } else {
+          metaHtml = `<span>課題</span>`;
+        }
+      } else if (isQuiz) {
+        metaHtml = `<span>小テスト</span>`;
+      } else if (isPage) {
+        metaHtml = `<span>ノート</span>`;
+      } else if (ytId) {
+        metaHtml = `<span>YouTube</span>`;
+      } else if (isFile) {
+        metaHtml = `<span>${utils.getFileExt(title)} ${it.size ? `・ ${utils.formatBytes(it.size)}` : ''}</span>`;
+      } else {
+        metaHtml = `<span>リンク</span>`;
+      }
+
+      // アクションボタンの生成
+      let actionHtml = '';
+      if (isFile) {
+        actionHtml = `
+          <button type="button" class="action-chip-btn action-download btn-file-direct-save" title="ダウンロードフォルダに保存">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            <span>保存</span>
+          </button>
+        `;
+      } else if (isQuiz) {
+        actionHtml = `
+          <span class="action-chip-btn action-quiz btn-open-quiz-direct" title="小テスト・アンケートを受験">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            <span>回答</span>
+          </span>
+        `;
+      } else if (isPage) {
+        actionHtml = `
+          <span class="action-chip-btn action-view" title="講義ノート・指示事項を表示">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            <span>閲覧</span>
+          </span>
+        `;
+      } else if (isAssignment) {
+        if (isAssignmentSubmitted) {
+          actionHtml = `
+            <span class="action-chip-btn action-submitted" title="提出状況の確認・再提出">
+              <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M5 13l4 4L19 7"/></svg>
+              <span>提出済み</span>
+            </span>
+          `;
+        } else {
+          actionHtml = `
+            <span class="action-chip-btn action-submit" title="課題の確認と提出">
+              <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+              <span>提出</span>
+            </span>
+          `;
+        }
+      } else if (ytId) {
+        // 保存ボタンの生成
+        actionHtml = `
+          <button type="button" class="action-chip-btn action-download btn-yt-dl-trigger" title="動画をダウンロードフォルダに保存">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            <span>保存</span>
+          </button>
+        `;
+      } else if (isExternal) {
+        actionHtml = `
+          <span class="action-chip-btn action-external" title="外部ページを開く">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            <span>開く</span>
+          </span>
+        `;
+      }
+
+      card.innerHTML = `
+        <div class="module-file-left">
+          <div class="module-file-icon ${iconClass}">
+            ${iconHtml}
+          </div>
+          <div class="module-file-info">
+            <span class="module-file-title" title="${title}">${title}</span>
+            <div class="module-file-meta">
+              ${metaHtml}
+            </div>
+          </div>
+        </div>
+        <div class="module-file-actions">
+          ${actionHtml}
+        </div>
+      `;
+
+      // カード全体のクリックイベント
+      card.addEventListener('click', (e) => {
+        // 単体ファイルの「保存」ボタンをクリックした時は直接ダウンロードフォルダ保存
+        const fileDirectSaveBtn = e.target.closest('.btn-file-direct-save');
+        if (fileDirectSaveBtn) {
+          e.stopPropagation();
+          e.preventDefault();
+          downloadSingleFile({
+            id: it.id,
+            url: it.url,
+            name: title,
+            courseId: it.courseId || state.materialsCourseId
+          });
+          return;
+        }
+
+        // YouTubeの保存ボタンクリック時はダウンロード処理のみ実行
+        const ytDlTrigger = e.target.closest('.btn-yt-dl-trigger');
+        if (ytDlTrigger) {
+          e.stopPropagation();
+          e.preventDefault();
+          downloadYouTubeVideo(it.url || it.htmlUrl, title);
+          return;
+        }
+
+        // 直接回答ボタンクリック時も伝播停止してブラウザを開く
+        const quizDirectBtn = e.target.closest('.btn-open-quiz-direct');
+        if (quizDirectBtn) {
+          e.stopPropagation();
+          e.preventDefault();
+          const quizUrl = it.htmlUrl || it.url;
+          if (quizUrl) utils.openExternalUrl(quizUrl);
+          return;
+        }
+
+        if (ytId) {
+          openYouTubeModal(ytId, title, it.url || it.htmlUrl);
+          return;
+        }
+
+        if (isPdf && it.id) {
+          openPdfPreviewModal(`/api/files/download?id=${it.id}&inline=true`, title, it.id, it.courseId || state.materialsCourseId);
+        } else if (isFile) {
+          downloadSingleFile({
+            id: it.id,
+            url: it.url,
+            name: title,
+            courseId: it.courseId || state.materialsCourseId
+          });
+        } else if (isQuiz) {
+          const quizUrl = it.htmlUrl || it.url;
+          // アクションボタン（受験・回答 ↗）クリック時は直接既定ブラウザで開く
+          if (e.target.classList.contains('btn-open-quiz-direct')) {
+            if (quizUrl) {
+              utils.openExternalUrl(quizUrl);
+              return;
+            }
+          }
+          // カード本体クリック時は詳細モーダルを開く
+          const existing = state.allAssignments.find(a => 
+            (it.contentId && String(a.id) === String(it.contentId)) ||
+            (it.id && String(a.id) === String(it.id)) ||
+            (a.name === title)
+          );
+          if (existing) {
+            openAssignmentModal(existing);
+          } else {
+            openAssignmentModal({
+              id: it.contentId || it.id,
+              courseId: state.materialsCourseId,
+              name: title,
+              courseName: document.getElementById('material-course-select')?.selectedOptions[0]?.text || '',
+              submissionTypes: ['online_quiz'],
+              htmlUrl: quizUrl
+            });
+          }
+        } else if (isPage && it.pageUrl) {
+          openPageModal(state.materialsCourseId, it.pageUrl, title);
+        } else if (isAssignment) {
+          const assignData = matchingAssign || {
+            id: it.assignmentId || it.contentId || it.id,
+            courseId: it.courseId || state.materialsCourseId,
+            name: title,
+            courseName: document.getElementById('material-course-select')?.selectedOptions[0]?.text || '',
+            submissionTypes: it.submissionTypes || ['online_upload'],
+            isSubmitted: isAssignmentSubmitted,
+            dueAt: it.dueAt,
+            pointsPossible: it.pointsPossible,
+            submission: it.submission
+          };
+          openAssignmentModal(assignData);
+        } else if (isExternal && it.url) {
+          utils.openExternalUrl(it.url);
+        }
+      });
+
+      grid.appendChild(card);
+    });
+
+    container.appendChild(group);
+  });
+
+  if (currentQuery) {
+    filterMaterialsInDom(currentQuery);
+  }
+}
+
+// ページコンテンツ表示モーダル
+async function openPageModal(courseId, pageUrl, fallbackTitle) {
+  const modal = document.getElementById('page-modal');
+  const titleEl = document.getElementById('page-modal-title');
+  const bodyEl = document.getElementById('page-modal-body');
+
+  titleEl.textContent = fallbackTitle || '講義ノート';
+  bodyEl.innerHTML = '<div style="color: var(--text-muted); padding: 20px;">本文を読み込み中...</div>';
+  modal.classList.add('open');
+
+  try {
+    const res = await api.get(`/api/courses/${courseId}/pages/${encodeURIComponent(pageUrl)}`);
+    if (res.success && res.page) {
+      titleEl.textContent = res.page.title || fallbackTitle;
+      bodyEl.innerHTML = utils.formatHtmlWithLinks(res.page.body || '<p style="color: var(--text-muted);">本文がありません。</p>');
+    } else {
+      throw new Error(res.error || 'ページ内容の取得に失敗しました');
+    }
+  } catch (err) {
+    bodyEl.innerHTML = `<div style="color: var(--status-urgent); padding: 16px;">ページ取得エラー: ${err.message}</div>`;
+  }
+}
+
+let isPageFullscreen = false;
+
+function togglePageFullscreen(forceState) {
+  isPageFullscreen = toggleModalFullscreen('page-modal-container', 'page-expand-icon', 'page-compress-icon', forceState);
+}
+
+function closePageModal() {
+  const modal = document.getElementById('page-modal');
+  if (modal) modal.classList.remove('open');
+  if (isPageFullscreen) {
+    togglePageFullscreen(false);
+  }
+}
+
+document.getElementById('page-modal-close-btn').addEventListener('click', closePageModal);
+
+const pageFsBtn = document.getElementById('page-modal-fullscreen-btn');
+if (pageFsBtn) {
+  pageFsBtn.addEventListener('click', () => togglePageFullscreen());
+}
+
+document.getElementById('page-modal').addEventListener('click', (e) => {
+  if (e.target.id === 'page-modal') closePageModal();
+});
+
+// 通常ファイル一括保存（科目全体の講義資料）
+document.getElementById('btn-download-all-zip').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  const allFiles = [];
+  state.groupedMaterials.forEach(m => {
+    m.items.forEach(it => {
+      if (it.type === 'File' && it.id) {
+        allFiles.push({
+          id: it.id,
+          name: it.displayName || it.title,
+          url: it.url,
+          courseId: it.courseId || state.materialsCourseId
+        });
+      }
+    });
+  });
+
+  if (allFiles.length === 0) return;
+
+  const courseSelect = document.getElementById('material-course-select');
+  const courseName = courseSelect.options[courseSelect.selectedIndex]?.text || '講義資料';
+
+  const origHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `
+    <svg class="spin" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+    準備中...
+  `;
+  try {
+    await downloadFilesToFolder(allFiles, `${courseName} 全講義資料`, courseName);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = origHtml;
+  }
+});
+
+// アプリ内 PDF ビューアモーダル（全画面表示対応）
+let isPdfFullscreen = false;
+let currentPdfFile = null;
+
+function togglePdfFullscreen(forceState) {
+  isPdfFullscreen = toggleModalFullscreen('pdf-modal-container', 'pdf-expand-icon', 'pdf-compress-icon', forceState);
+}
+
+function openPdfPreviewModal(fileUrl, fileName, fileId = null, courseId = null) {
+  const modal = document.getElementById('pdf-modal');
+  const iframe = document.getElementById('pdf-iframe');
+  const title = document.getElementById('pdf-modal-title');
+  const spinner = document.getElementById('pdf-loading-spinner');
+
+  currentPdfFile = {
+    id: fileId,
+    url: fileUrl,
+    name: fileName || 'document.pdf',
+    courseId: courseId || state.materialsCourseId
+  };
+
+  if (title) title.textContent = currentPdfFile.name;
+
+  if (spinner) {
+    spinner.style.display = 'flex';
+    spinner.style.opacity = '1';
+  }
+
+  // 高速な読み込み完了検知
+  iframe.onload = () => {
+    if (spinner) {
+      spinner.style.opacity = '0';
+      setTimeout(() => { spinner.style.display = 'none'; }, 200);
+    }
+  };
+
+  // PDF表示幅の設定
+  const viewerUrl = fileUrl.includes('#') ? fileUrl : `${fileUrl}#view=FitH&toolbar=1`;
+  iframe.src = viewerUrl;
+  modal.classList.add('open');
+}
+
+function closePdfModal() {
+  const modal = document.getElementById('pdf-modal');
+  const iframe = document.getElementById('pdf-iframe');
+  const spinner = document.getElementById('pdf-loading-spinner');
+  if (isPdfFullscreen) {
+    togglePdfFullscreen(false);
+  }
+  if (spinner) {
+    spinner.style.display = 'none';
+  }
+  iframe.src = 'about:blank';
+  modal.classList.remove('open');
+  currentPdfFile = null;
+}
+
+const pdfCloseBtn = document.getElementById('pdf-modal-close-btn');
+if (pdfCloseBtn) {
+  pdfCloseBtn.addEventListener('click', closePdfModal);
+}
+
+const pdfFsBtn = document.getElementById('pdf-modal-fullscreen-btn');
+if (pdfFsBtn) {
+  pdfFsBtn.addEventListener('click', () => togglePdfFullscreen());
+}
+
+// PDFモーダル内の保存ボタン
+const pdfDlBtn = document.getElementById('pdf-modal-download-btn');
+if (pdfDlBtn) {
+  pdfDlBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (!currentPdfFile) return;
+
+    const origHtml = pdfDlBtn.innerHTML;
+    pdfDlBtn.disabled = true;
+    pdfDlBtn.innerHTML = `
+      <svg class="spin" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+      <span>保存中...</span>
+    `;
+
+    try {
+      await downloadSingleFile({
+        id: currentPdfFile.id,
+        url: currentPdfFile.url,
+        name: currentPdfFile.name,
+        courseId: currentPdfFile.courseId
+      });
+    } finally {
+      pdfDlBtn.disabled = false;
+      pdfDlBtn.innerHTML = origHtml;
+    }
+  });
+}
+
+// アプリ内 YouTube プレイヤー ＆ ダウンローダー
+let currentYtVideoInfo = null;
+let isYouTubeFullscreen = false;
+
+function toggleYouTubeFullscreen(forceState) {
+  isYouTubeFullscreen = toggleModalFullscreen('youtube-modal-container', 'youtube-expand-icon', 'youtube-compress-icon', forceState);
+}
+
+function openYouTubeModal(videoId, title, originalUrl) {
+  const modal = document.getElementById('youtube-modal');
+  const container = document.getElementById('youtube-iframe-container');
+  const titleEl = document.getElementById('youtube-modal-title');
+  const extBtn = document.getElementById('youtube-modal-external-btn');
+
+  if (!modal || !container) return;
+
+  currentYtVideoInfo = {
+    videoId,
+    title: title || 'YouTube講義動画',
+    url: originalUrl || `https://www.youtube.com/watch?v=${videoId}`
+  };
+
+  if (titleEl) titleEl.textContent = title || '動画再生';
+  if (extBtn) extBtn.href = currentYtVideoInfo.url;
+  
+  // 物理的に iframe を動的生成してメディアセッションを起動
+  container.innerHTML = `<iframe id="youtube-iframe" src="https://www.youtube.com/embed/${videoId}?autoplay=1&enablejsapi=1" style="position: absolute; inset: 0; width: 100%; height: 100%; border: 0;" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
+  modal.classList.add('open');
+}
+
+function closeYouTubeModal() {
+  const modal = document.getElementById('youtube-modal');
+  const container = document.getElementById('youtube-iframe-container');
+  if (modal) modal.classList.remove('open');
+  if (isYouTubeFullscreen) {
+    toggleYouTubeFullscreen(false);
+  }
+  // iframeの破棄および再生停止
+  if (container) {
+    container.innerHTML = '';
+  }
+  currentYtVideoInfo = null;
+}
+
+const ytCloseBtn = document.getElementById('youtube-modal-close-btn');
+if (ytCloseBtn) {
+  ytCloseBtn.addEventListener('click', closeYouTubeModal);
+}
+
+const ytFsBtn = document.getElementById('youtube-modal-fullscreen-btn');
+if (ytFsBtn) {
+  ytFsBtn.addEventListener('click', () => toggleYouTubeFullscreen());
+}
+
+// YouTubeモーダル背景クリックで閉じる
+const ytModalEl = document.getElementById('youtube-modal');
+if (ytModalEl) {
+  ytModalEl.addEventListener('click', (e) => {
+    if (e.target.id === 'youtube-modal') closeYouTubeModal();
+  });
+}
+
+// yt-dlp による YouTube 動画のダウンロード
+async function downloadYouTubeVideo(url, title) {
+  try {
+    const res = await api.post('/api/youtube/download', { url, title });
+    if (res.success && res.job) {
+      downloadManager.addJob(res.job);
+      downloadManager.openPanel();
+    } else if (!res.success) {
+      console.error('YouTube download start failed:', res.error);
+    }
+  } catch (err) {
+    console.error('YouTube download request error:', err);
+  }
+}
+
+const ytDlBtn = document.getElementById('youtube-modal-dl-btn');
+if (ytDlBtn) {
+  ytDlBtn.addEventListener('click', () => {
+    if (currentYtVideoInfo && currentYtVideoInfo.url) {
+      downloadYouTubeVideo(currentYtVideoInfo.url, currentYtVideoInfo.title);
+    }
+  });
+}
+
+// 課題説明文や講義ノート内の YouTube リンククリックのインターセプト
+document.addEventListener('click', (e) => {
+  const ytLink = e.target.closest('.yt-inline-link');
+  if (ytLink) {
+    e.preventDefault();
+    const ytId = ytLink.dataset.ytId;
+    if (ytId) {
+      openYouTubeModal(ytId, ytLink.textContent || 'YouTube動画', ytLink.href);
+    }
+  }
+});
+
+window.addEventListener('keydown', (e) => {
+  // Alt+W: 執筆ワイドモード切替
+  if (e.altKey && (e.key === 'w' || e.key === 'W')) {
+    const assignModal = document.getElementById('assignment-modal');
+    if (assignModal && assignModal.classList.contains('open')) {
+      e.preventDefault();
+      toggleEditorWide();
+      return;
+    }
+  }
+
+  if (e.key === 'Escape') {
+    const ytModal = document.getElementById('youtube-modal');
+    if (ytModal && ytModal.classList.contains('open')) {
+      if (isYouTubeFullscreen) {
+        toggleYouTubeFullscreen(false);
+      } else {
+        closeYouTubeModal();
+      }
+      return;
+    }
+
+    const assignModal = document.getElementById('assignment-modal');
+    if (assignModal && assignModal.classList.contains('open')) {
+      if (isAssignmentFullscreen) {
+        toggleAssignmentFullscreen(false);
+      } else {
+        closeAssignmentModal();
+      }
+      return;
+    }
+
+    const modal = document.getElementById('pdf-modal');
+    if (modal && modal.classList.contains('open')) {
+      if (isPdfFullscreen) {
+        togglePdfFullscreen(false);
+      } else {
+        closePdfModal();
+      }
+      return;
+    }
+
+    const pageModal = document.getElementById('page-modal');
+    if (pageModal && pageModal.classList.contains('open')) {
+      if (isPageFullscreen) {
+        togglePageFullscreen(false);
+      } else {
+        closePageModal();
+      }
+      return;
+    }
+  }
+});
+
+// アナウンス（お知らせ）一覧
+async function loadAnnouncements() {
+  const list = document.getElementById('announcements-timeline-list');
+  list.innerHTML = '<div style="color: var(--text-muted); padding: 24px;">お知らせを取得中...</div>';
+
+  try {
+    const res = await api.get('/api/announcements');
+    if (res.success && res.announcements) {
+      state.announcements = res.announcements;
+      renderAnnouncements(res.announcements);
+    }
+  } catch (err) {
+    list.innerHTML = `<div style="color: var(--status-urgent); padding: 24px;">お知らせ取得エラー: ${err.message}</div>`;
+  }
+}
+
+function renderAnnouncements(announcements) {
+  const list = document.getElementById('announcements-timeline-list');
+  list.innerHTML = '';
+
+  if (announcements.length === 0) {
+    list.innerHTML = '<div style="color: var(--text-muted); padding: 32px; text-align: center;">新しいお知らせはありません。</div>';
+    return;
+  }
+
+  announcements.forEach(a => {
+    const card = document.createElement('div');
+    card.className = 'announcement-card';
+
+    const formattedDate = utils.formatDate(a.postedAt);
+    const authorName = a.author || '担当教員';
+
+    card.innerHTML = `
+      <div class="announcement-header">
+        <div class="announcement-title-row">
+          <h3 class="announcement-title">${a.title}</h3>
+        </div>
+        <div class="announcement-meta-row">
+          <span class="announcement-time-badge">
+            <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            ${formattedDate}
+          </span>
+          <span class="announcement-author-badge">
+            <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+            ${authorName}
+          </span>
+        </div>
+      </div>
+      <div class="announcement-body">${a.message}</div>
+    `;
+
+    // PDFリンクはアプリ内のPDFプレビューで開く
+    card.querySelectorAll('.announcement-body a').forEach(link => {
+      const href = link.getAttribute('href') || '';
+      const text = link.textContent.trim();
+      
+      // PDFリンクの自動検知
+      if (href.toLowerCase().includes('.pdf') || text.toLowerCase().endsWith('.pdf') || href.includes('/files/')) {
+        link.addEventListener('click', (e) => {
+          e.preventDefault();
+          const previewUrl = `/api/files/download?url=${encodeURIComponent(href)}&inline=true&name=${encodeURIComponent(text)}`;
+          openPdfPreviewModal(previewUrl, text);
+        });
+      } else {
+        link.setAttribute('target', '_blank');
+        link.setAttribute('rel', 'noopener noreferrer');
+      }
+    });
+
+    list.appendChild(card);
+  });
+}
+
+// 設定画面のイベント登録
+function setupSettingsEvents() {
+  const saveBtn = document.getElementById('btn-save-settings');
+  const clearCacheBtn = document.getElementById('btn-clear-cache');
+  const batterySwitch = document.getElementById('cfg-battery-saver');
+
+  api.get('/api/config').then(res => {
+    if (res.success && res.config) {
+      document.getElementById('cfg-base-url').value = res.config.baseUrl || '';
+      document.getElementById('cfg-api-token').value = res.config.apiToken || '';
+      if (res.config.currentQuarter) {
+        document.getElementById('cfg-quarter').value = res.config.currentQuarter;
+        state.currentQuarter = res.config.currentQuarter;
+        updateQuarterIndicators();
+      }
+      if (batterySwitch) {
+        batterySwitch.checked = Boolean(res.config.batterySaver);
+      }
+      const welcomeBanner = document.getElementById('setting-welcome-banner');
+      if (welcomeBanner) {
+        welcomeBanner.style.display = (res.config.baseUrl && res.config.apiToken) ? 'none' : 'flex';
+      }
+    }
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    const baseUrl = document.getElementById('cfg-base-url').value.trim();
+    const apiToken = document.getElementById('cfg-api-token').value.trim();
+    const currentQuarter = document.getElementById('cfg-quarter').value.trim();
+
+    if (!baseUrl || !apiToken) {
+      showToast('Canvas URLとAPIトークンを入力してください', 'error');
+      return;
+    }
+
+    const originalText = saveBtn.innerHTML;
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '保存中...';
+
+    try {
+      const theme = document.documentElement.getAttribute('data-theme') || 'dark';
+      const res = await api.post('/api/config', { baseUrl, apiToken, currentQuarter, theme });
+      if (res.success) {
+        state.currentQuarter = currentQuarter;
+        updateQuarterIndicators();
+        showToast('設定を保存しました。Canvasからデータを取得しています...', 'success');
+
+        // 初回ウェルカムバナーを非表示にしてダッシュボードへ遷移
+        const welcomeBanner = document.getElementById('setting-welcome-banner');
+        if (welcomeBanner) welcomeBanner.style.display = 'none';
+        switchView('dashboard');
+
+        await loadCourses(true);
+        await loadAllAssignments(true);
+        api.get('/api/me').then(meRes => {
+          if (meRes.success && meRes.profile) {
+            renderProfile(meRes.profile);
+          }
+        }).catch(() => {});
+      }
+    } catch (err) {
+      showToast(`保存エラー: ${err.message}`, 'error');
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = originalText;
+    }
+  });
+
+  clearCacheBtn.addEventListener('click', async () => {
+    try {
+      await api.post('/api/cache/clear', {});
+      showToast('キャッシュをクリアしました', 'success');
+      await loadCourses(true);
+      await loadAllAssignments(true);
+    } catch (err) {
+      showToast(`キャッシュクリア失敗: ${err.message}`, 'error');
+    }
+  });
+
+  // アプリ内アップデート確認ボタン
+  const checkUpdateBtn = document.getElementById('btn-check-update');
+  if (checkUpdateBtn) {
+    checkUpdateBtn.addEventListener('click', () => {
+      checkAppUpdates(true);
+    });
+  }
+}
+
+// アプリ全体の自動アップデート確認関数
+async function checkAppUpdates(isManual = false) {
+  const banner = document.getElementById('header-update-banner');
+  const bannerText = document.getElementById('header-update-text');
+  const restartBtn = document.getElementById('btn-header-update-restart');
+  const checkUpdateBtn = document.getElementById('btn-check-update');
+  const updateDesc = document.getElementById('update-status-desc');
+
+  if (isManual && checkUpdateBtn) {
+    checkUpdateBtn.disabled = true;
+    checkUpdateBtn.textContent = '確認中...';
+  }
+
+  // 1. Electron ネイティブの autoUpdater をトリガー
+  if (window.desktopAPI && typeof window.desktopAPI.checkForUpdates === 'function') {
+    window.desktopAPI.checkForUpdates().catch(() => {});
+  }
+
+  // 2. GitHub Releases API からの最新バージョン確認
+  try {
+    const res = await api.get('/api/app/check-update');
+    if (res && res.hasUpdate) {
+      if (banner && bannerText && restartBtn) {
+        if (!restartBtn.textContent.includes('再起動') && !restartBtn.textContent.includes('%')) {
+          bannerText.textContent = `新バージョン (${res.latestVersion}) が利用可能です`;
+          banner.style.display = 'flex';
+          if (!window.desktopAPI) {
+            restartBtn.textContent = '詳細を確認';
+            restartBtn.disabled = false;
+            restartBtn.onclick = () => {
+              utils.openExternalUrl(res.downloadUrl || 'https://github.com/shizengakari/CanvasLMS-Horizon/releases');
+            };
+          }
+        }
+      }
+      if (updateDesc) {
+        updateDesc.innerHTML = `<span style="color: var(--accent-primary); font-weight: 700;">新バージョン ${res.latestVersion} が利用可能です</span>`;
+      }
+      if (checkUpdateBtn) {
+        checkUpdateBtn.textContent = 'ダウンロード';
+        checkUpdateBtn.classList.remove('btn-secondary');
+        checkUpdateBtn.classList.add('btn-primary');
+        checkUpdateBtn.disabled = false;
+        checkUpdateBtn.onclick = () => {
+          utils.openExternalUrl(res.downloadUrl || 'https://github.com/shizengakari/CanvasLMS-Horizon/releases');
+        };
+      }
+      if (isManual) {
+        showToast(`新バージョン ${res.latestVersion} が利用可能です`, 'info');
+      }
+    } else {
+      if (updateDesc) updateDesc.textContent = '最新バージョンです';
+      if (isManual) {
+        showToast('お使いのバージョンは最新です', 'success');
+        if (checkUpdateBtn) {
+          checkUpdateBtn.textContent = '最新です';
+          setTimeout(() => {
+            checkUpdateBtn.disabled = false;
+            checkUpdateBtn.textContent = '更新を確認';
+          }, 2500);
+        }
+      }
+    }
+  } catch (err) {
+    if (isManual && checkUpdateBtn) {
+      checkUpdateBtn.disabled = false;
+      checkUpdateBtn.textContent = '更新を確認';
+    }
+  }
+}
+
+// コマンドパレット (Ctrl+K)
+function setupCommandPalette() {
+  const overlay = document.getElementById('command-palette');
+  const searchInput = document.getElementById('palette-search-input');
+  const resultsList = document.getElementById('palette-results-list');
+  let selectedIndex = 0;
+  let currentItems = [];
+
+  function openPalette() {
+    overlay.classList.add('open');
+    searchInput.value = '';
+    searchInput.focus();
+    selectedIndex = 0;
+    renderPaletteResults('');
+  }
+
+  function closePalette() {
+    overlay.classList.remove('open');
+  }
+
+  document.getElementById('global-search-trigger').addEventListener('click', openPalette);
+
+  window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      if (overlay.classList.contains('open')) closePalette();
+      else openPalette();
+      return;
+    }
+
+    if (!overlay.classList.contains('open')) return;
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closePalette();
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (currentItems.length > 0) {
+        selectedIndex = (selectedIndex + 1) % currentItems.length;
+        updateActiveItem();
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (currentItems.length > 0) {
+        selectedIndex = (selectedIndex - 1 + currentItems.length) % currentItems.length;
+        updateActiveItem();
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (currentItems.length > 0 && currentItems[selectedIndex]) {
+        currentItems[selectedIndex].action();
+      }
+    }
+  });
+
+  function updateActiveItem() {
+    const items = resultsList.querySelectorAll('.palette-item');
+    items.forEach((item, idx) => {
+      const isActive = idx === selectedIndex;
+      item.classList.toggle('active', isActive);
+      if (isActive) {
+        item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    });
+  }
+
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closePalette();
+  });
+
+  searchInput.addEventListener('input', (e) => {
+    selectedIndex = 0;
+    renderPaletteResults(e.target.value.toLowerCase().trim());
+  });
+
+  function renderPaletteResults(rawQuery) {
+    resultsList.innerHTML = '';
+    currentItems = [];
+
+    const query = (rawQuery || '').toLowerCase().trim();
+    // ひらがな・カタカナ正規化用の簡易ヘルパー
+    const normalizeKana = (str) => {
+      if (!str) return '';
+      return str.normalize('NFKC').toLowerCase()
+        .replace(/[\u30a1-\u30f6]/g, m => String.fromCharCode(m.charCodeAt(0) - 0x60));
+    };
+    const normQuery = normalizeKana(query);
+
+    const isMatch = (text) => {
+      if (!query) return true;
+      if (!text) return false;
+      const tLower = text.toLowerCase();
+      if (tLower.includes(query)) return true;
+      const tNorm = normalizeKana(text);
+      return tNorm.includes(normQuery);
+    };
+
+    // 1. 講義資料（PDF・スライド・配布ファイル・講義ノート・YouTube動画）
+    if (Array.isArray(state.groupedMaterials)) {
+      const activeCourseName = document.getElementById('material-course-select')?.selectedOptions[0]?.text || '';
+      state.groupedMaterials.forEach(m => {
+        (m.items || []).forEach(it => {
+          const title = it.displayName || it.title || '';
+          if (isMatch(title) || isMatch(m.name) || isMatch(activeCourseName)) {
+            const isFile = it.type === 'File';
+            const isPdf = isFile && title.toLowerCase().endsWith('.pdf');
+            const isPage = it.type === 'Page';
+            const isVideo = it.type === 'ExternalUrl' && utils.extractYouTubeVideoId(it.url || it.htmlUrl);
+
+            let type = '資料';
+            let typeColor = 'background: rgba(16, 185, 129, 0.16); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.3);';
+
+            if (isPdf) {
+              type = 'PDF';
+              typeColor = 'background: rgba(244, 63, 94, 0.16); color: #fda4af; border: 1px solid rgba(244, 63, 94, 0.3);';
+            } else if (isVideo) {
+              type = '動画';
+              typeColor = 'background: rgba(239, 68, 68, 0.16); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.3);';
+            } else if (isPage) {
+              type = 'ノート';
+              typeColor = 'background: rgba(245, 158, 11, 0.16); color: #fcd34d; border: 1px solid rgba(245, 158, 11, 0.3);';
+            }
+
+            currentItems.push({
+              type,
+              badgeStyle: typeColor,
+              title: title,
+              subtitle: `${activeCourseName ? `${activeCourseName} • ` : ''}${m.name || 'モジュール'}`,
+              action: () => {
+                closePalette();
+                if (isPdf && it.id) {
+                  openPdfPreviewModal(`/api/files/download?id=${it.id}&inline=true`, title, it.id, it.courseId || state.materialsCourseId);
+                } else if (isVideo) {
+                  const ytId = utils.extractYouTubeVideoId(it.url || it.htmlUrl);
+                  openYouTubeModal(ytId, title, it.url || it.htmlUrl);
+                } else if (isPage && it.pageUrl) {
+                  openPageModal(it.courseId || state.materialsCourseId, it.pageUrl, title);
+                } else if (isFile) {
+                  downloadSingleFile({
+                    id: it.id,
+                    url: it.url,
+                    name: title,
+                    courseId: it.courseId || state.materialsCourseId
+                  });
+                }
+              }
+            });
+          }
+        });
+      });
+    }
+
+    // 2. お知らせ
+    if (Array.isArray(state.announcements)) {
+      state.announcements.forEach(a => {
+        if (isMatch(a.title) || isMatch(a.message) || isMatch(a.author)) {
+          currentItems.push({
+            type: 'お知らせ',
+            badgeStyle: 'background: rgba(168, 85, 247, 0.16); color: #d8b4fe; border: 1px solid rgba(168, 85, 247, 0.3);',
+            title: a.title,
+            subtitle: `${a.author || '教員'} • ${utils.formatDate(a.postedAt)}`,
+            action: () => {
+              closePalette();
+              switchView('announcements');
+            }
+          });
+        }
+      });
+    }
+
+    // 3. 課題アイテム
+    state.allAssignments.forEach(a => {
+      if (isMatch(a.name) || isMatch(a.courseName) || isMatch(a.description)) {
+        currentItems.push({
+          type: '課題',
+          badgeStyle: 'background: rgba(99, 102, 241, 0.16); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.3);',
+          title: a.name,
+          subtitle: `${a.courseName || ''} • 締切: ${utils.formatDate(a.dueAt)}`,
+          action: () => {
+            closePalette();
+            openAssignmentModal(a);
+          }
+        });
+      }
+    });
+
+    // 4. 科目アイテム
+    state.courses.forEach(c => {
+      if (isMatch(c.name) || isMatch(c.cleanName) || isMatch(c.courseCode)) {
+        currentItems.push({
+          type: '科目',
+          badgeStyle: 'background: rgba(6, 182, 212, 0.16); color: #67e8f9; border: 1px solid rgba(6, 182, 212, 0.3);',
+          title: `${c.cleanName || c.name}`,
+          subtitle: `${c.quarter ? `[${c.quarter}] ` : ''}${c.courseCode || '履修科目'} • 講義資料を開く`,
+          action: () => {
+            closePalette();
+            state.materialsCourseId = c.id;
+            const matSelect = document.getElementById('material-course-select');
+            if (matSelect) matSelect.value = c.id;
+            switchView('materials');
+            loadCourseMaterialsGrouped(c.id);
+          }
+        });
+      }
+    });
+
+    if (currentItems.length === 0) {
+      resultsList.innerHTML = '<div style="color: var(--text-muted); padding: 24px; text-align: center; font-size: 13px;">該当するPDF資料、課題、お知らせ、科目が見つかりません</div>';
+      return;
+    }
+
+    currentItems.slice(0, 16).forEach((it, idx) => {
+      const el = document.createElement('div');
+      el.className = `palette-item${idx === selectedIndex ? ' active' : ''}`;
+
+      el.innerHTML = `
+        <span class="file-icon-badge" style="${it.badgeStyle || ''}">${it.type}</span>
+        <div style="display: flex; flex-direction: column; overflow: hidden; flex: 1;">
+          <span style="font-weight: 600; color: var(--text-main); font-size: 13.5px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${utils.escapeHtml(it.title)}</span>
+          <span style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${utils.escapeHtml(it.subtitle)}</span>
+        </div>
+        <kbd style="font-size: 10px; opacity: 0.6;">↵</kbd>
+      `;
+
+      el.addEventListener('mouseenter', () => {
+        selectedIndex = idx;
+        updateActiveItem();
+      });
+
+      el.addEventListener('click', it.action);
+      resultsList.appendChild(el);
+    });
+  }
+}
+
+window.addEventListener('DOMContentLoaded', initApp);
