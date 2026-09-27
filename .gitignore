@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Production Build Output (packaged apps)
+build/
+dist/
+*.zip
+
+# User Private Configuration & Tokens
+config.json
+
+# Logs & Temporary Files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / Editor Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

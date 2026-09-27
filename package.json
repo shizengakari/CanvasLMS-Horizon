@@ -1,0 +1,79 @@
+{
+  "name": "canvas-horizon",
+  "version": "1.0.0",
+  "description": "Canvas LMS デスクトップクライアント",
+  "main": "main.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shizengakari/CanvasLMS-Horizon.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "web": "node server.js",
+    "dev": "electron .",
+    "dist": "electron-builder --win",
+    "build": "electron-packager . \"Canvas Horizon\" --platform=win32 --arch=x64 --icon=app.ico --out=build --overwrite --prune=true --asar",
+    "pack-zip": "electron-packager . \"Canvas Horizon\" --platform=win32 --arch=x64 --icon=app.ico --out=build --overwrite --prune=true --asar && powershell -NoProfile -Command \"Compress-Archive -Path 'build\\Canvas Horizon-win32-x64\\*' -DestinationPath 'Canvas-Horizon-Windows-x64.zip' -Force\""
+  },
+  "build": {
+    "appId": "io.github.shizengakari.canvashorizon",
+    "productName": "Canvas Horizon",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!build/**",
+      "!dist/**",
+      "!*.zip",
+      "!Canvas-Horizon-Windows-x64.zip"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "app.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Canvas Horizon"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "shizengakari",
+        "repo": "CanvasLMS-Horizon"
+      }
+    ]
+  },
+  "keywords": [
+    "canvas-lms",
+    "canvas",
+    "electron"
+  ],
+  "author": "shizengakari",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "archiver": "^8.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.4",
+    "electron-updater": "^6.8.9",
+    "express": "^5.2.1",
+    "multer": "^2.4.0"
+  },
+  "devDependencies": {
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "electron-packager": "^17.1.2"
+  }
+}
