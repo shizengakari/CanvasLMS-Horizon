@@ -2197,6 +2197,8 @@ function renderGroupedMaterials(modules) {
     group.className = 'module-group';
 
     const fileItems = m.items.filter(it => it.type === 'File');
+    const ytItems = m.items.filter(it => it.type === 'ExternalUrl' && utils.extractYouTubeVideoId(it.url || it.htmlUrl));
+    const savableItems = [...fileItems, ...ytItems];
 
     group.innerHTML = `
       <div class="module-group-header">
@@ -2205,10 +2207,10 @@ function renderGroupedMaterials(modules) {
           <span>${m.name}</span>
           <span class="module-items-badge">${m.items.length}件</span>
         </div>
-        ${fileItems.length > 0 ? `
-          <button class="action-chip-btn btn-zip-module" style="font-weight: 700; color: #38bdf8; border-color: rgba(56, 189, 248, 0.35);" title="選択したフォルダにこの回の資料をまとめて保存します">
+        ${savableItems.length > 0 ? `
+          <button class="action-chip-btn btn-zip-module" style="font-weight: 700; color: #38bdf8; border-color: rgba(56, 189, 248, 0.35);" title="この回のファイル・動画をすべて保存します">
             <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-            この回の資料を保存 (${fileItems.length}件)
+            この回の資料を保存 (${savableItems.length}件)
           </button>
         ` : ''}
       </div>
@@ -2223,7 +2225,7 @@ function renderGroupedMaterials(modules) {
       group.classList.toggle('collapsed');
     });
 
-    if (fileItems.length > 0) {
+    if (savableItems.length > 0) {
       const zipBtn = group.querySelector('.btn-zip-module');
       zipBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -2234,12 +2236,22 @@ function renderGroupedMaterials(modules) {
           準備中...
         `;
         try {
-          await downloadFilesToFolder(fileItems.map(f => ({
-            id: f.id,
-            name: f.displayName || f.title,
-            url: f.url,
-            courseId: f.courseId || state.materialsCourseId
-          })), `${m.name} 資料`, m.name);
+          const promises = [];
+          // 通常ファイルは一括ダウンロード
+          if (fileItems.length > 0) {
+            promises.push(downloadFilesToFolder(fileItems.map(f => ({
+              id: f.id,
+              name: f.displayName || f.title,
+              url: f.url,
+              courseId: f.courseId || state.materialsCourseId
+            })), `${m.name} 資料`, m.name));
+          }
+          // YouTube動画は個別にジョブとしてキュー
+          ytItems.forEach(it => {
+            const title = it.displayName || it.title;
+            promises.push(downloadYouTubeVideo(it.url || it.htmlUrl, title));
+          });
+          await Promise.all(promises);
         } finally {
           zipBtn.disabled = false;
           zipBtn.innerHTML = origContent;
@@ -2575,10 +2587,11 @@ document.getElementById('page-modal').addEventListener('click', (e) => {
   if (e.target.id === 'page-modal') closePageModal();
 });
 
-// 通常ファイル一括保存（科目全体の講義資料）
+// ファイル・動画の一括保存（科目全体）
 document.getElementById('btn-download-all-zip').addEventListener('click', async (e) => {
   const btn = e.currentTarget;
   const allFiles = [];
+  const allYtItems = [];
   state.groupedMaterials.forEach(m => {
     m.items.forEach(it => {
       if (it.type === 'File' && it.id) {
@@ -2588,11 +2601,16 @@ document.getElementById('btn-download-all-zip').addEventListener('click', async 
           url: it.url,
           courseId: it.courseId || state.materialsCourseId
         });
+      } else if (it.type === 'ExternalUrl') {
+        const ytId = utils.extractYouTubeVideoId(it.url || it.htmlUrl);
+        if (ytId) {
+          allYtItems.push(it);
+        }
       }
     });
   });
 
-  if (allFiles.length === 0) return;
+  if (allFiles.length === 0 && allYtItems.length === 0) return;
 
   const courseSelect = document.getElementById('material-course-select');
   const courseName = courseSelect.options[courseSelect.selectedIndex]?.text || '講義資料';
@@ -2604,7 +2622,14 @@ document.getElementById('btn-download-all-zip').addEventListener('click', async 
     準備中...
   `;
   try {
-    await downloadFilesToFolder(allFiles, `${courseName} 全講義資料`, courseName);
+    const promises = [];
+    if (allFiles.length > 0) {
+      promises.push(downloadFilesToFolder(allFiles, `${courseName} 全講義資料`, courseName));
+    }
+    allYtItems.forEach(it => {
+      promises.push(downloadYouTubeVideo(it.url || it.htmlUrl, it.displayName || it.title));
+    });
+    await Promise.all(promises);
   } finally {
     btn.disabled = false;
     btn.innerHTML = origHtml;
