@@ -196,31 +196,39 @@ body.battery-saver * {
   text-shadow: none !important;
 }
 
-/* 電源・省電力モード切替丸型アイコンボタン */
+/* 電源・省電力モード切替丸型アイコンボタン (省電力モード時のみ表示) */
 .power-mode-btn {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.35);
   transition: all var(--transition-fast);
+  animation: powerBtnFadeIn 0.25s ease-out;
 }
 
-.power-mode-btn.saving-active {
-  color: #10b981 !important;
-  background: rgba(16, 185, 129, 0.12) !important;
-  border-color: rgba(16, 185, 129, 0.35) !important;
+@keyframes powerBtnFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
-.power-mode-btn.saving-active svg {
-  color: #10b981 !important;
+.power-mode-btn svg {
+  color: #10b981;
 }
 
 .power-mode-btn:hover {
-  background: var(--bg-card-hover);
-  color: var(--text-main);
-  border-color: var(--border-medium);
-}
-
-.power-mode-btn.saving-active:hover {
-  background: rgba(16, 185, 129, 0.22) !important;
-  border-color: rgba(16, 185, 129, 0.55) !important;
+  background: rgba(16, 185, 129, 0.22);
+  border-color: rgba(16, 185, 129, 0.55);
+  color: #059669;
+  transform: translateY(-1px);
 }
 
 /* 設定画面 電源ステータスピル */
@@ -235,17 +243,19 @@ body.battery-saver * {
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
   font-weight: 500;
+  transition: all var(--transition-fast);
 }
 
-.power-status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #10b981;
+.power-status-pill.on-battery {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.3);
+  color: #d97706;
 }
 
-.power-status-pill.on-battery .power-status-dot {
-  background: #f59e0b;
+.power-status-pill.ac-power {
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.25);
+  color: #059669;
 }
 
 /* バッテリーセグメントコントロール */

@@ -810,40 +810,47 @@ async function setupBatteryManager() {
   batteryManagerInitialized = true;
 
   const powerBtn = document.getElementById('btn-power-mode');
-  const savingIcon = document.getElementById('power-saving-icon');
-  const plugIcon = document.getElementById('power-plug-icon');
   const powerIndicator = document.getElementById('power-status-indicator');
   const powerText = document.getElementById('power-status-text');
+  const acIcon = document.getElementById('power-status-icon-ac');
+  const batIcon = document.getElementById('power-status-icon-battery');
 
   function updateBatteryUi() {
     const isSaving = state.isBatterySaving;
     document.body.classList.toggle('battery-saver', isSaving);
 
-    // ヘッダーの丸型電源アイコンボタンの更新
+    // ヘッダーの丸型電源アイコンボタン: 省電力モードの場合のみ表示
     if (powerBtn) {
-      powerBtn.classList.toggle('saving-active', isSaving);
-      if (savingIcon && plugIcon) {
-        savingIcon.style.display = isSaving ? 'block' : 'none';
-        plugIcon.style.display = isSaving ? 'none' : 'block';
-      }
-
-      // 直感的なツールチップ
-      let tooltip = '';
-      if (state.batteryMode === 'auto') {
-        tooltip = isSaving
-          ? '⚡ 省電力モード動作中 (バッテリー駆動) [クリックで常時省電力に固定]'
-          : '🔌 電源接続中 (通常モード) [クリックで省電力モードを切替]';
-      } else if (state.batteryMode === 'on') {
-        tooltip = '🌿 常時省電力モード (ON) [クリックで通常モードに切替]';
+      if (isSaving) {
+        powerBtn.style.display = 'inline-flex';
+        let tooltip = '';
+        if (state.batteryMode === 'auto') {
+          tooltip = '🌿 省電力モード動作中 (バッテリー駆動) [クリックで通常モードに切替]';
+        } else if (state.batteryMode === 'on') {
+          tooltip = '🌿 常時省電力モード動作中 [クリックで通常モードに切替]';
+        } else {
+          tooltip = '🌿 省電力モード動作中 [クリックで通常モードに切替]';
+        }
+        powerBtn.setAttribute('title', tooltip);
       } else {
-        tooltip = '🚀 通常モード (省電力OFF) [クリックで自動モード(推奨)に戻す]';
+        powerBtn.style.display = 'none';
       }
-      powerBtn.setAttribute('title', tooltip);
     }
 
+    // 設定画面の電源状態インジケーター (シンプルなアイコン判定)
     if (powerIndicator && powerText) {
       powerIndicator.classList.toggle('on-battery', state.isOnBattery);
-      powerText.textContent = state.isOnBattery ? 'バッテリー駆動' : '電源に接続中';
+      powerIndicator.classList.toggle('ac-power', !state.isOnBattery);
+
+      if (state.isOnBattery) {
+        if (acIcon) acIcon.style.display = 'none';
+        if (batIcon) batIcon.style.display = 'block';
+        powerText.textContent = isSaving ? 'バッテリー駆動 (省電力中)' : 'バッテリー駆動';
+      } else {
+        if (acIcon) acIcon.style.display = 'block';
+        if (batIcon) batIcon.style.display = 'none';
+        powerText.textContent = '電源に接続中';
+      }
     }
 
     // 設定画面のセグメントボタン
@@ -858,7 +865,7 @@ async function setupBatteryManager() {
     } else if (state.batteryMode === 'off') {
       state.isBatterySaving = false;
     } else {
-      // 'auto' (デフォルト・推奨): プラグの有無を見て、バッテリー駆動時に最大省電力化
+      // 'auto' (デフォルト・推奨): バッテリー駆動時に省電力化
       state.isBatterySaving = Boolean(state.isOnBattery);
     }
     updateBatteryUi();
@@ -893,17 +900,13 @@ async function setupBatteryManager() {
   if (powerBtn) {
     powerBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      let nextMode = 'auto';
-      if (state.batteryMode === 'auto') {
-        nextMode = state.isBatterySaving ? 'off' : 'on';
-      } else if (state.batteryMode === 'on') {
-        nextMode = 'off';
-      } else {
+      let nextMode = 'off';
+      if (state.batteryMode === 'off') {
         nextMode = 'auto';
       }
-
       state.batteryMode = nextMode;
       evaluateBatterySaving();
+      showToast(nextMode === 'off' ? '通常モードに切り替えました' : '自動モードに戻しました', 'info');
 
       try {
         await api.post('/api/config', { batteryMode: nextMode });
@@ -3270,6 +3273,9 @@ async function checkAppUpdates(isManual = false) {
     if (verTag && res && res.currentVersion) {
       verTag.textContent = res.currentVersion;
     }
+
+    const checkTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
     if (res && res.hasUpdate) {
       if (banner && bannerText && restartBtn) {
         if (!restartBtn.textContent.includes('再起動') && !restartBtn.textContent.includes('%')) {
@@ -3285,7 +3291,7 @@ async function checkAppUpdates(isManual = false) {
         }
       }
       if (updateDesc) {
-        updateDesc.innerHTML = `<span style="color: var(--accent-primary); font-weight: 700;">新バージョン ${res.latestVersion} が利用可能です</span>`;
+        updateDesc.innerHTML = `<span style="color: var(--accent-primary); font-weight: 700;">新バージョン ${res.latestVersion} が利用可能です</span><div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">確認時刻: ${checkTime}</div>`;
       }
       if (checkUpdateBtn) {
         checkUpdateBtn.textContent = 'ダウンロード';
@@ -3299,10 +3305,12 @@ async function checkAppUpdates(isManual = false) {
       if (isManual) {
         showToast(`新バージョン ${res.latestVersion} が利用可能です`, 'info');
       }
-    } else {
-      if (updateDesc) updateDesc.textContent = '最新バージョンです';
+    } else if (res && res.success) {
+      if (updateDesc) {
+        updateDesc.innerHTML = `<span>最新バージョンです (${res.currentVersion})</span><div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">GitHub Releases確認済み (${checkTime})</div>`;
+      }
       if (isManual) {
-        showToast('お使いのバージョンは最新です', 'success');
+        showToast(`お使いのバージョンは最新です (${res.currentVersion})`, 'success');
         if (checkUpdateBtn) {
           checkUpdateBtn.textContent = '最新です';
           setTimeout(() => {
@@ -3311,11 +3319,30 @@ async function checkAppUpdates(isManual = false) {
           }, 2500);
         }
       }
+    } else {
+      // GitHub API の取得失敗 (レート制限またはオフライン)
+      const errReason = res?.error || 'GitHub Releasesに接続できませんでした';
+      if (updateDesc) {
+        updateDesc.innerHTML = `<span style="color: #ef4444; font-weight: 600;">更新の確認に失敗</span><div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">${errReason} (${checkTime})</div>`;
+      }
+      if (isManual) {
+        showToast(errReason, 'warning');
+        if (checkUpdateBtn) {
+          checkUpdateBtn.disabled = false;
+          checkUpdateBtn.textContent = '再試行';
+        }
+      }
     }
   } catch (err) {
-    if (isManual && checkUpdateBtn) {
-      checkUpdateBtn.disabled = false;
-      checkUpdateBtn.textContent = '更新を確認';
+    if (updateDesc) {
+      updateDesc.innerHTML = `<span style="color: #ef4444; font-weight: 600;">更新の確認に失敗</span><div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">サーバー通信エラー</div>`;
+    }
+    if (isManual) {
+      showToast('アップデート確認中にエラーが発生しました', 'error');
+      if (checkUpdateBtn) {
+        checkUpdateBtn.disabled = false;
+        checkUpdateBtn.textContent = '更新を確認';
+      }
     }
   }
 }

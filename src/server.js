@@ -903,9 +903,26 @@ app.post('/api/open-downloads', (req, res) => {
   res.json({ success: true });
 });
 
+// セマンティックバージョニング比較関数 (vA > vB なら 1, vA < vB なら -1, 等しいなら 0)
+function compareSemver(v1, v2) {
+  const clean = v => (v || '').replace(/^v/, '').trim();
+  const p1 = clean(v1).split('.').map(n => parseInt(n, 10) || 0);
+  const p2 = clean(v2).split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(p1.length, p2.length); i++) {
+    const num1 = p1[i] || 0;
+    const num2 = p2[i] || 0;
+    if (num1 > num2) return 1;
+    if (num1 < num2) return -1;
+  }
+  return 0;
+}
+
 // 16. アップデート確認 (GitHub Releases連携)
 app.get('/api/app/check-update', async (req, res) => {
+  const checkedAt = new Date().toISOString();
   try {
+    // 最新の package.json を都度ロード
+    delete require.cache[require.resolve('../package.json')];
     const pkg = require('../package.json');
     const currentVersion = `v${pkg.version}`;
     const cfg = loadConfig();
@@ -914,11 +931,16 @@ app.get('/api/app/check-update', async (req, res) => {
     // GitHub Releases API への問い合わせ
     const ghUrl = `https://api.github.com/repos/${repo}/releases/latest`;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const timeout = setTimeout(() => controller.abort(), 6000);
 
     try {
       const resp = await fetch(ghUrl, {
-        headers: { 'User-Agent': 'CanvasHorizon-App' },
+        headers: {
+          'User-Agent': 'CanvasHorizon-App',
+          'Accept': 'application/vnd.github.v3+json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache'
+        },
         signal: controller.signal
       });
       clearTimeout(timeout);
@@ -926,29 +948,49 @@ app.get('/api/app/check-update', async (req, res) => {
       if (resp.ok) {
         const release = await resp.json();
         const latestTag = release.tag_name || release.name;
-        const hasUpdate = Boolean(latestTag && latestTag !== currentVersion);
+        const hasUpdate = Boolean(latestTag && compareSemver(latestTag, currentVersion) > 0);
         return res.json({
           success: true,
           currentVersion,
           latestVersion: latestTag || currentVersion,
           hasUpdate,
           releaseNotes: release.body || '',
-          downloadUrl: release.assets?.[0]?.browser_download_url || release.html_url
+          downloadUrl: release.assets?.[0]?.browser_download_url || release.html_url,
+          publishedAt: release.published_at,
+          checkedAt
+        });
+      } else {
+        const errText = resp.status === 403 ? 'GitHub API のリクエスト制限に達しました' : `GitHub API エラー (HTTP ${resp.status})`;
+        return res.json({
+          success: false,
+          currentVersion,
+          latestVersion: currentVersion,
+          hasUpdate: false,
+          error: errText,
+          checkedAt
         });
       }
     } catch (e) {
       clearTimeout(timeout);
+      const isTimeout = e.name === 'AbortError';
+      return res.json({
+        success: false,
+        currentVersion,
+        latestVersion: currentVersion,
+        hasUpdate: false,
+        error: isTimeout ? '接続がタイムアウトしました' : 'ネットワークに接続できませんでした',
+        checkedAt
+      });
     }
-
-    return res.json({
-      success: true,
-      currentVersion,
-      latestVersion: currentVersion,
-      hasUpdate: false,
-      message: '最新バージョンです'
-    });
   } catch (err) {
-    res.json({ success: true, currentVersion: 'v1.0.0', hasUpdate: false });
+    return res.json({
+      success: false,
+      currentVersion: 'v1.0.6',
+      latestVersion: 'v1.0.6',
+      hasUpdate: false,
+      error: err.message,
+      checkedAt
+    });
   }
 });
 

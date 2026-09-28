@@ -62,6 +62,12 @@ function loadConfig() {
     config.batterySaver = config.batteryMode === 'on';
   }
 
+  // githubRepo の正規化 (旧リポジトリ名や未設定の場合は公式リポジトリを適用)
+  const OFFICIAL_REPO = 'shizengakari/CanvasLMS-Horizon';
+  if (!config.githubRepo || config.githubRepo === 'shize-tech/CanvasLMS') {
+    config.githubRepo = OFFICIAL_REPO;
+  }
+
   // 3. 環境変数（CI/CD またはローカル開発用）からの補完
   if (!config.baseUrl && process.env.CANVAS_BASE_URL) {
     config.baseUrl = process.env.CANVAS_BASE_URL;

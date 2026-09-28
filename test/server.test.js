@@ -59,4 +59,13 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     assert.strictEqual(data.success, true);
     assert.strictEqual(canvasService.cache.courses, null, 'Cache should be wiped after /api/cache/clear');
   });
+
+  it('should return check-update status with valid currentVersion and checkedAt', async () => {
+    const res = await fetch(`${baseUrl}/api/app/check-update`);
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.ok(data.currentVersion.startsWith('v1.0.'), `currentVersion should start with v1.0, got: ${data.currentVersion}`);
+    assert.ok(data.checkedAt, 'Response should include checkedAt timestamp');
+    assert.strictEqual(typeof data.hasUpdate, 'boolean');
+  });
 });
