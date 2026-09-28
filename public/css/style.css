@@ -184,16 +184,42 @@
 /* ==========================================================================
    BATTERY SAVER MODE & POWER CONTROLS
    ========================================================================== */
+/* GPU負荷の高い重いエフェクト（背景ブラー、過剰なシャドウ、テキストシャドウ）を抑制 */
 body.battery-saver * {
-  animation: none !important;
-  animation-duration: 0.001ms !important;
-  animation-iteration-count: 1 !important;
-  transition: none !important;
-  transition-duration: 0.001ms !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   box-shadow: none !important;
   text-shadow: none !important;
+}
+
+/* 常時ループする装飾目的の背景パルス・グローの抑制 */
+body.battery-saver .header-update-banner {
+  animation: none !important;
+}
+
+/* ★ 省電力モードでも動作する最低限・必須アニメーション ★
+   ユーザー操作に対するフィードバックや再読み込み・ローディング表示は回し続ける */
+body.battery-saver .refresh-btn.spinning .refresh-icon,
+body.battery-saver .spin,
+body.battery-saver .spinner-ring,
+body.battery-saver .loading-spinner,
+body.battery-saver .sync-spin {
+  animation: spin 0.8s linear infinite !important;
+  animation-duration: 0.8s !important;
+  animation-iteration-count: infinite !important;
+}
+
+/* 再読み込み完了時のチェックマークへのスムーズな切り替えトランジション */
+body.battery-saver .refresh-btn .refresh-icon,
+body.battery-saver .refresh-btn .refresh-check-icon {
+  transition: opacity 0.22s cubic-bezier(0.2, 0, 0, 1), transform 0.25s cubic-bezier(0.34, 1.4, 0.64, 1) !important;
+}
+
+/* モーダルやトーストの最低限のフェードイン */
+body.battery-saver .modal-container,
+body.battery-saver .modal-content,
+body.battery-saver .toast {
+  transition: opacity 0.15s ease, transform 0.15s ease !important;
 }
 
 /* 電源・省電力モード切替丸型アイコンボタン (省電力モード時のみ表示) */
@@ -893,6 +919,11 @@ a:hover {
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+.spin {
+  display: inline-block;
+  animation: spin 1s linear infinite;
 }
 
 .refresh-btn .refresh-check-icon {

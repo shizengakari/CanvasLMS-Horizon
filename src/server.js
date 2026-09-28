@@ -983,10 +983,12 @@ app.get('/api/app/check-update', async (req, res) => {
       });
     }
   } catch (err) {
+    let fallbackVer = 'v1.0.7';
+    try { fallbackVer = `v${require('../package.json').version}`; } catch (e) {}
     return res.json({
       success: false,
-      currentVersion: 'v1.0.6',
-      latestVersion: 'v1.0.6',
+      currentVersion: fallbackVer,
+      latestVersion: fallbackVer,
       hasUpdate: false,
       error: err.message,
       checkedAt

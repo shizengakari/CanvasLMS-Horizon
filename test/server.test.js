@@ -68,4 +68,25 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     assert.ok(data.checkedAt, 'Response should include checkedAt timestamp');
     assert.strictEqual(typeof data.hasUpdate, 'boolean');
   });
+
+  it('should ensure battery saver CSS preserves refresh button and spinner animations', async () => {
+    const res = await fetch(`${baseUrl}/css/style.css`);
+    const css = await res.text();
+
+    // body.battery-saver * に一律 animation: none !important が設定されていないこと
+    assert.ok(!css.includes('body.battery-saver * {\n  animation: none !important;'), 'Should not unconditionally disable all animations on *');
+    // 省電力モードでも refresh-btn.spinning がスピンする定義があること
+    assert.ok(css.includes('body.battery-saver .refresh-btn.spinning .refresh-icon'), 'Should preserve refresh-btn spin in battery-saver mode');
+    // .spin クラスが定義されていること
+    assert.ok(css.includes('.spin {'), 'Should have .spin class defined');
+  });
+
+  it('should ensure app.js implements natural celebration petal animation', async () => {
+    const res = await fetch(`${baseUrl}/js/app.js`);
+    const js = await res.text();
+
+    assert.ok(js.includes('drawSakuraPetal'), 'Should include drawSakuraPetal function');
+    assert.ok(js.includes('flipAngle'), 'Should calculate 3D flipAngle for natural flutter');
+    assert.ok(js.includes('drawSparkle'), 'Should include celebratory sparkle particles');
+  });
 });

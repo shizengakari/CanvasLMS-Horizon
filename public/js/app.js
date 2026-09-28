@@ -593,65 +593,224 @@ async function downloadSingleFile({ id, url, name, courseId }) {
   }
 }
 
-// 課題提出完了時の演出アニメーション
+// 課題提出完了時の演出アニメーション (自然で優雅な花びらの舞い上がり＆セレブレーション)
 function triggerConfetti() {
   const canvas = document.getElementById('confetti-canvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+
+  // 高DPIディスプレイ対応
+  const dpr = window.devicePixelRatio || 1;
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+  canvas.width = width * dpr;
+  canvas.height = height * dpr;
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+  ctx.scale(dpr, dpr);
+
+  // 省電力モード時は粒子数を最適化しつつ美しさを保持
+  const isSaving = document.body.classList.contains('battery-saver');
+  const petalCount = isSaving ? 65 : 120;
+  const sparklesCount = isSaving ? 14 : 28;
+
+  // 上品で自然な桜色・パールホワイト・淡いゴールドのカラーパレット
+  const petalPalettes = [
+    { fill: 'rgba(255, 183, 197, 0.94)', stroke: 'rgba(255, 160, 180, 0.55)', backFill: 'rgba(244, 114, 182, 0.90)' }, // 桜色
+    { fill: 'rgba(251, 207, 232, 0.92)', stroke: 'rgba(244, 114, 182, 0.45)', backFill: 'rgba(236, 72, 153, 0.88)' }, // 淡桜
+    { fill: 'rgba(253, 164, 175, 0.94)', stroke: 'rgba(244, 63, 94, 0.4)',   backFill: 'rgba(251, 113, 133, 0.90)' }, // ピーチピンク
+    { fill: 'rgba(255, 241, 242, 0.96)', stroke: 'rgba(255, 205, 210, 0.65)', backFill: 'rgba(255, 228, 230, 0.92)' }, // パールホワイト
+    { fill: 'rgba(254, 240, 138, 0.90)', stroke: 'rgba(251, 191, 36, 0.55)', backFill: 'rgba(252, 211, 77, 0.88)' }, // シャンパンゴールド
+    { fill: 'rgba(255, 255, 255, 0.97)', stroke: 'rgba(255, 210, 225, 0.5)', backFill: 'rgba(253, 242, 248, 0.94)' }  // ピュアホワイト
+  ];
 
   const particles = [];
-  const colors = ['#6366f1', '#06b6d4', '#10b981', '#f59e0b', '#ec4899', '#ffffff'];
 
-  for (let i = 0; i < 90; i++) {
+  // 花びら粒子の生成（画面下部〜中央下から上方へ自然にふわっと舞い上がる）
+  for (let i = 0; i < petalCount; i++) {
+    const originX = width * 0.5 + (Math.random() - 0.5) * (width * 0.55);
+    const originY = height * 0.78 + (Math.random() - 0.5) * (height * 0.22);
+
+    // 上方向への自然な初速（噴出ではなく、ふわっと風に乗って舞い上がる上昇気流）
+    const upwardSpeed = -(Math.random() * 8.5 + 5.5);
+    const horizontalSpread = (Math.random() - 0.5) * 7.5 + (originX < width * 0.5 ? -1.8 : 1.8);
+
     particles.push({
-      x: canvas.width / 2,
-      y: canvas.height / 2,
-      vx: (Math.random() - 0.5) * 16,
-      vy: (Math.random() - 0.7) * 16,
-      size: Math.random() * 8 + 4,
-      color: colors[Math.floor(Math.random() * colors.length)],
-      gravity: 0.35,
-      opacity: 1,
+      type: Math.random() > 0.4 ? 'sakura' : 'oval',
+      x: originX,
+      y: originY,
+      vx: horizontalSpread,
+      vy: upwardSpeed,
+      size: Math.random() * 8 + 8.5, // 自然な花びらのサイズ
+      lengthFactor: Math.random() * 0.35 + 1.15, // 縦横比
+      colors: petalPalettes[Math.floor(Math.random() * petalPalettes.length)],
+      gravity: 0.10 + Math.random() * 0.05, // 非常に穏やかな重力（ふわりと舞う）
+      airResistance: 0.98, // 滑らかな空気抵抗
+      opacity: 0, // 最初はフェードイン
+      targetOpacity: Math.random() * 0.25 + 0.75,
+      fadeInRate: 0.08,
+      fadeOutRate: 0.006 + Math.random() * 0.005,
+      // 3Dひらひら回転
       rotation: Math.random() * 360,
-      vRot: (Math.random() - 0.5) * 10
+      rotSpeed: (Math.random() - 0.5) * 2.2,
+      flipAngle: Math.random() * Math.PI * 2,
+      flipSpeed: (Math.random() * 0.038 + 0.018) * (Math.random() < 0.5 ? -1 : 1),
+      // 風のゆらぎ（左右の優しい揺れ）
+      wobble: Math.random() * Math.PI * 2,
+      wobbleSpeed: Math.random() * 0.045 + 0.02,
+      wobbleAmp: Math.random() * 1.6 + 0.7
     });
   }
 
-  let animationFrame;
-  function animate() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    let alive = false;
+  // 豪華さと祝祭感を上品に引き立てる微細なシャンパンゴールド＆ホワイトの光の粒子
+  for (let i = 0; i < sparklesCount; i++) {
+    particles.push({
+      type: 'sparkle',
+      x: width * 0.5 + (Math.random() - 0.5) * (width * 0.6),
+      y: height * 0.72 + (Math.random() - 0.5) * (height * 0.28),
+      vx: (Math.random() - 0.5) * 6,
+      vy: -(Math.random() * 7.5 + 4),
+      size: Math.random() * 2.8 + 1.8,
+      color: Math.random() > 0.35 ? '#fbbf24' : '#ffffff',
+      gravity: 0.07,
+      airResistance: 0.965,
+      opacity: 1,
+      fadeOutRate: 0.014 + Math.random() * 0.009,
+      sparklePhase: Math.random() * Math.PI * 2,
+      sparkleSpeed: 0.16
+    });
+  }
 
-    particles.forEach(p => {
+  // 既存のアニメーションフレームがあればキャンセル
+  if (window._petalAnimId) {
+    cancelAnimationFrame(window._petalAnimId);
+  }
+
+  // 桜の花びらの描画（先端に繊細な切れ込み）
+  function drawSakuraPetal(c, size, lenFactor) {
+    const l = size * lenFactor;
+    const w = size;
+    c.beginPath();
+    c.moveTo(0, l * 0.5);
+    c.bezierCurveTo(-w * 0.68, l * 0.15, -w * 0.62, -l * 0.35, -w * 0.22, -l * 0.5);
+    c.lineTo(0, -l * 0.36); // 先端のサクラノッチ
+    c.lineTo(w * 0.22, -l * 0.5);
+    c.bezierCurveTo(w * 0.62, -l * 0.35, w * 0.68, l * 0.15, 0, l * 0.5);
+    c.closePath();
+    c.fill();
+    c.stroke();
+  }
+
+  // 柔らかなしずく型花弁の描画
+  function drawOvalPetal(c, size, lenFactor) {
+    const l = size * lenFactor;
+    const w = size * 0.82;
+    c.beginPath();
+    c.moveTo(0, l * 0.5);
+    c.bezierCurveTo(-w * 0.55, l * 0.2, -w * 0.55, -l * 0.45, 0, -l * 0.5);
+    c.bezierCurveTo(w * 0.55, -l * 0.45, w * 0.55, l * 0.2, 0, l * 0.5);
+    c.closePath();
+    c.fill();
+    c.stroke();
+  }
+
+  // きらめき光粒子の描画（微細なクロスライト）
+  function drawSparkle(c, size) {
+    c.beginPath();
+    c.arc(0, 0, size, 0, Math.PI * 2);
+    c.fill();
+    c.lineWidth = 1;
+    c.beginPath();
+    c.moveTo(-size * 2.2, 0);
+    c.lineTo(size * 2.2, 0);
+    c.moveTo(0, -size * 2.2);
+    c.lineTo(0, size * 2.2);
+    c.stroke();
+  }
+
+  let running = true;
+  function animate() {
+    if (!running) return;
+    ctx.clearRect(0, 0, width, height);
+    let activeParticles = 0;
+
+    for (let i = 0; i < particles.length; i++) {
+      const p = particles[i];
+
+      // 物理挙動の更新
       p.x += p.vx;
       p.y += p.vy;
+      p.vx *= p.airResistance;
       p.vy += p.gravity;
-      p.vx *= 0.98;
-      p.opacity -= 0.014;
-      p.rotation += p.vRot;
 
-      if (p.opacity > 0) {
-        alive = true;
-        ctx.save();
-        ctx.translate(p.x, p.y);
-        ctx.rotate((p.rotation * Math.PI) / 180);
-        ctx.globalAlpha = p.opacity;
-        ctx.fillStyle = p.color;
-        ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
-        ctx.restore();
+      if (p.type === 'sparkle') {
+        p.opacity -= p.fadeOutRate;
+        p.sparklePhase += p.sparkleSpeed;
+        if (p.opacity > 0) {
+          activeParticles++;
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          const shimmer = (Math.sin(p.sparklePhase) + 1) * 0.35 + 0.35;
+          ctx.globalAlpha = Math.max(0, p.opacity * shimmer);
+          ctx.fillStyle = p.color;
+          ctx.strokeStyle = p.color;
+          drawSparkle(ctx, p.size);
+          ctx.restore();
+        }
+      } else {
+        // 花びら
+        if (p.opacity < p.targetOpacity) {
+          p.opacity = Math.min(p.targetOpacity, p.opacity + p.fadeInRate);
+        } else {
+          p.opacity -= p.fadeOutRate;
+        }
+
+        // 風による横揺れ（ゆらぎ）
+        p.wobble += p.wobbleSpeed;
+        p.x += Math.sin(p.wobble) * p.wobbleAmp;
+
+        // 3Dひらひら回転
+        p.rotation += p.rotSpeed;
+        p.flipAngle += p.flipSpeed;
+
+        if (p.opacity > 0 && p.y < height + 60) {
+          activeParticles++;
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate((p.rotation * Math.PI) / 180);
+
+          // 3Dフリップ感（表裏の反転による自然な舞い）
+          const cosFlip = Math.cos(p.flipAngle);
+          ctx.scale(cosFlip, 1);
+
+          ctx.globalAlpha = Math.max(0, p.opacity);
+          // 表面と裏面でほのかにトーンを変えてリアルな陰影
+          const isFront = cosFlip >= 0;
+          ctx.fillStyle = isFront ? p.colors.fill : p.colors.backFill;
+          ctx.strokeStyle = p.colors.stroke;
+          ctx.lineWidth = 0.6;
+
+          if (p.type === 'sakura') {
+            drawSakuraPetal(ctx, p.size, p.lengthFactor);
+          } else {
+            drawOvalPetal(ctx, p.size, p.lengthFactor);
+          }
+
+          ctx.restore();
+        }
       }
-    });
+    }
 
-    if (alive) {
-      animationFrame = requestAnimationFrame(animate);
+    if (activeParticles > 0) {
+      window._petalAnimId = requestAnimationFrame(animate);
     } else {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      cancelAnimationFrame(animationFrame);
+      running = false;
+      ctx.clearRect(0, 0, width, height);
+      window._petalAnimId = null;
     }
   }
-  animate();
+
+  window._petalAnimId = requestAnimationFrame(animate);
 }
 
 // 画面遷移・ナビゲーション制御
@@ -980,7 +1139,8 @@ async function triggerRefresh(force = true) {
     await syncAllData(force);
 
     const elapsed = Date.now() - startTime;
-    const waitRemaining = Math.max(0, 650 - elapsed);
+    // 最低でも1回転以上（約750ms）は回転を維持して同期状態を視覚的に伝える
+    const waitRemaining = Math.max(0, 750 - elapsed);
 
     setTimeout(() => {
       if (refreshBtn) {
@@ -989,12 +1149,15 @@ async function triggerRefresh(force = true) {
 
         setTimeout(() => {
           refreshBtn.classList.remove('success');
-        }, 1500);
+        }, 1300);
       }
     }, waitRemaining);
 
   } catch (err) {
-    if (refreshBtn) refreshBtn.classList.remove('spinning');
+    if (refreshBtn) {
+      refreshBtn.classList.remove('spinning');
+      refreshBtn.classList.remove('success');
+    }
     console.error('Refresh sync error:', err);
   }
 }
