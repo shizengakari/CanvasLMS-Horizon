@@ -3,6 +3,8 @@
  * 洗練されたUI/UXと高速性を備えた Canvas LMS デスクトップクライアント
  */
 
+const STORAGE_KEY_BATTERY_MODE = 'canvas_horizon_battery_mode';
+
 // アプリケーション全体の状態管理 (State)
 const state = {
   profile: null,
@@ -24,7 +26,13 @@ const state = {
   filesQueue: [],
   isSubmitting: false,
   materialsCourseId: null,
-  batteryMode: 'auto', // 'auto' | 'on' | 'off'
+  batteryMode: (() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_BATTERY_MODE);
+      if (saved && ['auto', 'on', 'off'].includes(saved)) return saved;
+    } catch (_) {}
+    return 'auto';
+  })(), // 'auto' | 'on' | 'off'
   isBatterySaving: false,
   isOnBattery: false
 };
@@ -982,15 +990,7 @@ async function setupBatteryManager() {
     if (powerBtn) {
       if (isSaving) {
         powerBtn.style.display = 'inline-flex';
-        let tooltip = '';
-        if (state.batteryMode === 'auto') {
-          tooltip = '🌿 省電力モード動作中 (バッテリー駆動) [クリックで通常モードに切替]';
-        } else if (state.batteryMode === 'on') {
-          tooltip = '🌿 常時省電力モード動作中 [クリックで通常モードに切替]';
-        } else {
-          tooltip = '🌿 省電力モード動作中 [クリックで通常モードに切替]';
-        }
-        powerBtn.setAttribute('title', tooltip);
+        powerBtn.setAttribute('title', '省電力モード動作中 (クリックで設定を開く)');
       } else {
         powerBtn.style.display = 'none';
       }
@@ -1055,22 +1055,14 @@ async function setupBatteryManager() {
     } catch (e) {}
   }
 
-  // ヘッダー丸型ボタンのクリックで手動トグル
+  // ヘッダー丸型ボタンのクリックで設定画面（バッテリー設定項目）へ遷移
   if (powerBtn) {
-    powerBtn.addEventListener('click', async (e) => {
+    powerBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      let nextMode = 'off';
-      if (state.batteryMode === 'off') {
-        nextMode = 'auto';
-      }
-      state.batteryMode = nextMode;
-      evaluateBatterySaving();
-      showToast(nextMode === 'off' ? '通常モードに切り替えました' : '自動モードに戻しました', 'info');
-
-      try {
-        await api.post('/api/config', { batteryMode: nextMode });
-      } catch (err) {
-        console.warn('Failed to persist battery mode:', err);
+      switchView('settings');
+      const targetSec = document.getElementById('setting-item-battery');
+      if (targetSec) {
+        targetSec.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
     });
   }
@@ -1080,6 +1072,9 @@ async function setupBatteryManager() {
     btn.addEventListener('click', async () => {
       const mode = btn.dataset.batteryMode;
       state.batteryMode = mode;
+      try {
+        localStorage.setItem(STORAGE_KEY_BATTERY_MODE, mode);
+      } catch (_) {}
       evaluateBatterySaving();
       try {
         await api.post('/api/config', { batteryMode: mode });
@@ -1088,6 +1083,17 @@ async function setupBatteryManager() {
       }
     });
   });
+
+  // 設定ファイル(API)からの同期
+  api.get('/api/config').then(res => {
+    if (res?.success && res.config?.batteryMode && ['auto', 'on', 'off'].includes(res.config.batteryMode)) {
+      state.batteryMode = res.config.batteryMode;
+      try {
+        localStorage.setItem(STORAGE_KEY_BATTERY_MODE, res.config.batteryMode);
+      } catch (_) {}
+      evaluateBatterySaving();
+    }
+  }).catch(() => {});
 
   window.evaluateAppBatterySaving = evaluateBatterySaving;
   evaluateBatterySaving();
@@ -1123,7 +1129,7 @@ async function syncAllData(forceRefresh = false) {
   }
 }
 
-// 右上の更新ボタンによる同期実行（回転アニメーション＆データ同期）
+// 右上の更新ボタンによる同期実行（同期中くるくる回転、完了後は速やかに自然復帰）
 async function triggerRefresh(force = true) {
   const refreshBtn = document.getElementById('btn-refresh');
   if (refreshBtn && refreshBtn.classList.contains('spinning')) return;
@@ -1133,26 +1139,17 @@ async function triggerRefresh(force = true) {
     refreshBtn.classList.add('spinning');
   }
 
-  const startTime = Date.now();
-
   try {
     await syncAllData(force);
 
-    const elapsed = Date.now() - startTime;
-    // 最低でも1回転以上（約750ms）は回転を維持して同期状態を視覚的に伝える
-    const waitRemaining = Math.max(0, 750 - elapsed);
+    if (refreshBtn) {
+      refreshBtn.classList.remove('spinning');
+      refreshBtn.classList.add('success');
 
-    setTimeout(() => {
-      if (refreshBtn) {
-        refreshBtn.classList.remove('spinning');
-        refreshBtn.classList.add('success');
-
-        setTimeout(() => {
-          refreshBtn.classList.remove('success');
-        }, 1300);
-      }
-    }, waitRemaining);
-
+      setTimeout(() => {
+        refreshBtn.classList.remove('success');
+      }, 600);
+    }
   } catch (err) {
     if (refreshBtn) {
       refreshBtn.classList.remove('spinning');
@@ -1189,6 +1186,7 @@ async function initApp() {
       }
       if (meRes.config && meRes.config.batteryMode !== undefined) {
         state.batteryMode = meRes.config.batteryMode;
+        try { localStorage.setItem(STORAGE_KEY_BATTERY_MODE, meRes.config.batteryMode); } catch (_) {}
         if (window.evaluateAppBatterySaving) window.evaluateAppBatterySaving();
       }
       if (meRes.config && meRes.config.theme) {
@@ -1210,6 +1208,11 @@ async function initApp() {
       }
     } else {
       // プロファイル取得に失敗・オフライン等の場合
+      if (meRes?.config?.batteryMode && ['auto', 'on', 'off'].includes(meRes.config.batteryMode)) {
+        state.batteryMode = meRes.config.batteryMode;
+        try { localStorage.setItem(STORAGE_KEY_BATTERY_MODE, meRes.config.batteryMode); } catch (_) {}
+        if (window.evaluateAppBatterySaving) window.evaluateAppBatterySaving();
+      }
       if (isConfigured) {
         switchView('dashboard');
         const welcomeBanner = document.getElementById('setting-welcome-banner');
@@ -1224,6 +1227,11 @@ async function initApp() {
     console.warn('Profile load deferred/cached:', err.message);
     try {
       const cfgRes = await api.get('/api/config');
+      if (cfgRes?.config?.batteryMode && ['auto', 'on', 'off'].includes(cfgRes.config.batteryMode)) {
+        state.batteryMode = cfgRes.config.batteryMode;
+        try { localStorage.setItem(STORAGE_KEY_BATTERY_MODE, cfgRes.config.batteryMode); } catch (_) {}
+        if (window.evaluateAppBatterySaving) window.evaluateAppBatterySaving();
+      }
       if (cfgRes?.config?.baseUrl && cfgRes?.config?.apiToken) {
         switchView('dashboard');
         const welcomeBanner = document.getElementById('setting-welcome-banner');
@@ -1277,29 +1285,16 @@ async function initApp() {
     refreshBtn.addEventListener('click', () => triggerRefresh(true));
   }
 
-  // 3. アプリ起動時の自動同期（SWRパターン: キャッシュを即時利用してスピナー待機を解消）
+  // 3. アプリ起動時の初期描画（キャッシュ優先で即座に表示、バックグラウンドでの定期通信は行わない）
   setTimeout(async () => {
-    // キャッシュ優先で高速描画（スピナー待ちゼロ）
     await syncAllData(false);
 
-    // 初回ロードで課題が0件、または前回の同期から15分以上経過している場合のみバックグラウンドで最新同期
-    const needsBackgroundSync = (!state.allAssignments || state.allAssignments.length === 0) ||
-                                (Date.now() - lastSyncTimestamp > 15 * 60 * 1000);
-    if (needsBackgroundSync && !state.isBatterySaving) {
+    // 初回起動で課題データが全く存在しない場合のみ、初期ロードとして取得
+    const isInitialEmpty = (!state.allAssignments || state.allAssignments.length === 0);
+    if (isInitialEmpty && (state.config?.baseUrl || state.profile)) {
       triggerRefresh(false);
     }
   }, 50);
-
-  // 4. 定期バックグラウンド自動同期
-  // フォーカス復帰時の突発的な強制同期は廃止し、不要な通信・CPU負荷を完全排除
-  setInterval(() => {
-    // 省電力モード中（バッテリー駆動等）、またはウィンドウ非表示（最小化等）は完全スキップ
-    if (state.isBatterySaving || document.visibilityState === 'hidden') return;
-    // プラグ接続中であっても30分以上経過していなければ自動同期しない
-    if (Date.now() - lastSyncTimestamp > 30 * 60 * 1000) {
-      triggerRefresh(false);
-    }
-  }, 5 * 60 * 1000);
 }
 
 function renderProfile(profile) {
@@ -3331,6 +3326,11 @@ function setupSettingsEvents() {
         state.currentQuarter = res.config.currentQuarter;
         updateQuarterIndicators();
       }
+      if (res.config.batteryMode && ['auto', 'on', 'off'].includes(res.config.batteryMode)) {
+        state.batteryMode = res.config.batteryMode;
+        try { localStorage.setItem(STORAGE_KEY_BATTERY_MODE, res.config.batteryMode); } catch (_) {}
+        if (window.evaluateAppBatterySaving) window.evaluateAppBatterySaving();
+      }
       if (batterySwitch) {
         batterySwitch.checked = Boolean(res.config.batterySaver);
       }
@@ -3356,6 +3356,9 @@ function setupSettingsEvents() {
     saveBtn.innerHTML = '保存中...';
 
     try {
+      try {
+        localStorage.setItem(STORAGE_KEY_BATTERY_MODE, state.batteryMode);
+      } catch (_) {}
       const theme = document.documentElement.getAttribute('data-theme') || 'dark';
       const res = await api.post('/api/config', {
         baseUrl,
@@ -3454,7 +3457,7 @@ async function checkAppUpdates(isManual = false) {
         }
       }
       if (updateDesc) {
-        updateDesc.innerHTML = `<span style="color: var(--accent-primary); font-weight: 700;">新バージョン ${res.latestVersion} が利用可能です</span><div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">確認時刻: ${checkTime}</div>`;
+        updateDesc.innerHTML = `<span style="color: var(--accent-primary); font-weight: 600;">新バージョン (${res.latestVersion}) が利用可能です</span>`;
       }
       if (checkUpdateBtn) {
         checkUpdateBtn.textContent = 'ダウンロード';
@@ -3470,7 +3473,7 @@ async function checkAppUpdates(isManual = false) {
       }
     } else if (res && res.success) {
       if (updateDesc) {
-        updateDesc.innerHTML = `<span>最新バージョンです (${res.currentVersion})</span><div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">GitHub Releases確認済み (${checkTime})</div>`;
+        updateDesc.textContent = '最新バージョンです';
       }
       if (isManual) {
         showToast(`お使いのバージョンは最新です (${res.currentVersion})`, 'success');
@@ -3483,13 +3486,12 @@ async function checkAppUpdates(isManual = false) {
         }
       }
     } else {
-      // GitHub API の取得失敗 (レート制限またはオフライン)
-      const errReason = res?.error || 'GitHub Releasesに接続できませんでした';
+      // 取得失敗
       if (updateDesc) {
-        updateDesc.innerHTML = `<span style="color: #ef4444; font-weight: 600;">更新の確認に失敗</span><div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">${errReason} (${checkTime})</div>`;
+        updateDesc.innerHTML = `<span style="color: #ef4444; font-weight: 500;">更新の確認に失敗しました</span>`;
       }
       if (isManual) {
-        showToast(errReason, 'warning');
+        showToast('更新の確認に失敗しました', 'warning');
         if (checkUpdateBtn) {
           checkUpdateBtn.disabled = false;
           checkUpdateBtn.textContent = '再試行';
@@ -3498,7 +3500,7 @@ async function checkAppUpdates(isManual = false) {
     }
   } catch (err) {
     if (updateDesc) {
-      updateDesc.innerHTML = `<span style="color: #ef4444; font-weight: 600;">更新の確認に失敗</span><div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">サーバー通信エラー</div>`;
+      updateDesc.innerHTML = `<span style="color: #ef4444; font-weight: 500;">更新の確認に失敗しました</span>`;
     }
     if (isManual) {
       showToast('アップデート確認中にエラーが発生しました', 'error');

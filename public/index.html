@@ -111,7 +111,7 @@
           </button>
 
           <!-- 電源・省電力モード切替ボタン (省電力モード時のみ表示されるシンプルなエコアイコン) -->
-          <button class="icon-btn power-mode-btn" id="btn-power-mode" title="省電力モード動作中" style="display: none;">
+          <button class="icon-btn power-mode-btn" id="btn-power-mode" title="省電力モード動作中 (設定を開く)" style="display: none;">
             <svg id="power-saving-icon" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/>
               <path stroke-linecap="round" stroke-linejoin="round" d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/>
@@ -339,7 +339,7 @@
             </div>
 
             <!-- バッテリーとパフォーマンス（大学講義・外出時向け） -->
-            <div class="setting-item" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border-subtle);">
+            <div class="setting-item" id="setting-item-battery" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border-subtle);">
               <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
                 <label class="setting-label" style="margin-bottom: 0;">バッテリーと省電力モード</label>
                 <span class="power-status-pill" id="power-status-indicator">
@@ -367,12 +367,12 @@
               </span>
             </div>
 
-            <!-- アプリバージョンおよびアップデート管理 -->
+            <!-- バージョン情報およびアップデート -->
             <div class="setting-item" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border-subtle);">
-              <label class="setting-label">バージョンとアップデート</label>
+              <label class="setting-label">バージョン情報</label>
               <div class="setting-update-card" id="setting-update-card">
                 <div class="update-card-left">
-                  <div class="update-app-title">Canvas Horizon <span class="update-version-tag" id="app-current-version">v1.0.7</span></div>
+                  <div class="update-app-title">バージョン <span class="update-version-tag" id="app-current-version">v1.0.8</span></div>
                   <div class="update-app-desc" id="update-status-desc">最新バージョンです</div>
                 </div>
                 <div class="update-card-right">

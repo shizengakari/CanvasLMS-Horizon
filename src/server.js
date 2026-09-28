@@ -97,7 +97,11 @@ app.get('/api/me', async (req, res) => {
       config: {
         baseUrl: config.baseUrl,
         hasToken: Boolean(config.apiToken),
-        isConfigured
+        isConfigured,
+        theme: config.theme,
+        currentQuarter: config.currentQuarter || '',
+        batteryMode: config.batteryMode || (config.batterySaver ? 'on' : 'auto'),
+        batterySaver: config.batterySaver
       }
     });
   }

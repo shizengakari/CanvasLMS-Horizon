@@ -89,4 +89,25 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     assert.ok(js.includes('flipAngle'), 'Should calculate 3D flipAngle for natural flutter');
     assert.ok(js.includes('drawSparkle'), 'Should include celebratory sparkle particles');
   });
+
+  it('should ensure modal transition matches power-saving behavior without slow resizing', async () => {
+    const res = await fetch(`${baseUrl}/css/style.css`);
+    const css = await res.text();
+
+    // modal-container に遅延リサイズ (width 0.32s, height 0.32s 等) が含まれていないこと
+    assert.ok(!css.includes('width 0.32s'), 'Should not have slow width animation on modal');
+    assert.ok(!css.includes('height 0.32s'), 'Should not have slow height animation on modal');
+  });
+
+  it('should ensure power-saving mode and background updates follow minimal polling', async () => {
+    const res = await fetch(`${baseUrl}/js/app.js`);
+    const js = await res.text();
+
+    // 定期バックグラウンド自動同期 (setInterval) が排除されていること
+    assert.ok(!js.includes('setInterval(() => {\n    // 省電力モード中'), 'Should not have periodic background polling interval');
+    // 人工的な 750ms 回転待機タイマーが排除されていること
+    assert.ok(!js.includes('Math.max(0, 750 - elapsed)'), 'Should not artificially prolong refresh button rotation');
+    // ヘッダーの省電力ボタンが設定画面を開くこと
+    assert.ok(js.includes("switchView('settings')"), 'Power button should navigate to settings');
+  });
 });
