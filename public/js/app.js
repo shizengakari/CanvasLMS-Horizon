@@ -809,16 +809,38 @@ async function setupBatteryManager() {
   if (batteryManagerInitialized) return;
   batteryManagerInitialized = true;
 
-  const badge = document.getElementById('header-battery-badge');
+  const powerBtn = document.getElementById('btn-power-mode');
+  const savingIcon = document.getElementById('power-saving-icon');
+  const plugIcon = document.getElementById('power-plug-icon');
   const powerIndicator = document.getElementById('power-status-indicator');
   const powerText = document.getElementById('power-status-text');
 
   function updateBatteryUi() {
     const isSaving = state.isBatterySaving;
     document.body.classList.toggle('battery-saver', isSaving);
-    if (badge) {
-      badge.style.display = isSaving ? 'inline-flex' : 'none';
+
+    // ヘッダーの丸型電源アイコンボタンの更新
+    if (powerBtn) {
+      powerBtn.classList.toggle('saving-active', isSaving);
+      if (savingIcon && plugIcon) {
+        savingIcon.style.display = isSaving ? 'block' : 'none';
+        plugIcon.style.display = isSaving ? 'none' : 'block';
+      }
+
+      // 直感的なツールチップ
+      let tooltip = '';
+      if (state.batteryMode === 'auto') {
+        tooltip = isSaving
+          ? '⚡ 省電力モード動作中 (バッテリー駆動) [クリックで常時省電力に固定]'
+          : '🔌 電源接続中 (通常モード) [クリックで省電力モードを切替]';
+      } else if (state.batteryMode === 'on') {
+        tooltip = '🌿 常時省電力モード (ON) [クリックで通常モードに切替]';
+      } else {
+        tooltip = '🚀 通常モード (省電力OFF) [クリックで自動モード(推奨)に戻す]';
+      }
+      powerBtn.setAttribute('title', tooltip);
     }
+
     if (powerIndicator && powerText) {
       powerIndicator.classList.toggle('on-battery', state.isOnBattery);
       powerText.textContent = state.isOnBattery ? 'バッテリー駆動' : '電源に接続中';
@@ -836,13 +858,13 @@ async function setupBatteryManager() {
     } else if (state.batteryMode === 'off') {
       state.isBatterySaving = false;
     } else {
-      // 'auto': バッテリー駆動時に自動で省電力モード
+      // 'auto' (デフォルト・推奨): プラグの有無を見て、バッテリー駆動時に最大省電力化
       state.isBatterySaving = Boolean(state.isOnBattery);
     }
     updateBatteryUi();
   }
 
-  // 1. Electron Native powerMonitor の確認
+  // 1. Electron Native powerMonitor の確認 (プラグの有無)
   if (window.desktopAPI && typeof window.desktopAPI.getPowerState === 'function') {
     try {
       const pState = await window.desktopAPI.getPowerState();
@@ -856,7 +878,7 @@ async function setupBatteryManager() {
       });
     }
   } else if (navigator.getBattery) {
-    // 2. ブラウザ標準 Battery Status API
+    // 2. ブラウザ標準 Battery Status API フォールバック
     try {
       const b = await navigator.getBattery();
       state.isOnBattery = !b.charging;
@@ -867,11 +889,27 @@ async function setupBatteryManager() {
     } catch (e) {}
   }
 
-  // ヘッダーバッジクリックで設定画面のバッテリー設定へジャンプ
-  if (badge) {
-    badge.addEventListener('click', () => {
-      switchView('settings');
-      document.getElementById('battery-segmented-control')?.scrollIntoView({ behavior: 'smooth' });
+  // ヘッダー丸型ボタンのクリックで手動トグル
+  if (powerBtn) {
+    powerBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      let nextMode = 'auto';
+      if (state.batteryMode === 'auto') {
+        nextMode = state.isBatterySaving ? 'off' : 'on';
+      } else if (state.batteryMode === 'on') {
+        nextMode = 'off';
+      } else {
+        nextMode = 'auto';
+      }
+
+      state.batteryMode = nextMode;
+      evaluateBatterySaving();
+
+      try {
+        await api.post('/api/config', { batteryMode: nextMode });
+      } catch (err) {
+        console.warn('Failed to persist battery mode:', err);
+      }
     });
   }
 
@@ -1086,27 +1124,16 @@ async function initApp() {
     }
   }, 50);
 
-  // 4. ウィンドウフォーカス復帰時 & 可視化時の自動同期
-  const onWindowActive = () => {
-    // 省電力モード中はフォーカス復帰時の自動同期を完全停止（手動の更新ボタンのみ）
-    if (state.isBatterySaving) return;
-
-    // 講義中のアプリ切り替えを考慮し、15分以上経過している場合のみ同期
-    if (Date.now() - lastSyncTimestamp > 15 * 60 * 1000) {
+  // 4. 定期バックグラウンド自動同期
+  // フォーカス復帰時の突発的な強制同期は廃止し、不要な通信・CPU負荷を完全排除
+  setInterval(() => {
+    // 省電力モード中（バッテリー駆動等）、またはウィンドウ非表示（最小化等）は完全スキップ
+    if (state.isBatterySaving || document.visibilityState === 'hidden') return;
+    // プラグ接続中であっても30分以上経過していなければ自動同期しない
+    if (Date.now() - lastSyncTimestamp > 30 * 60 * 1000) {
       triggerRefresh(false);
     }
-  };
-  window.addEventListener('focus', onWindowActive);
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') onWindowActive();
-  });
-
-  // 5. 定期バックグラウンド自動同期
-  setInterval(() => {
-    // 省電力モード中、またはウィンドウ非表示（最小化時など）は定期同期をスキップ
-    if (state.isBatterySaving || document.visibilityState === 'hidden') return;
-    triggerRefresh(false);
-  }, 15 * 60 * 1000);
+  }, 5 * 60 * 1000);
 }
 
 function renderProfile(profile) {
@@ -1224,10 +1251,17 @@ async function loadAllAssignments(forceRefresh = false) {
   try {
     const res = await api.get(`/api/dashboard/timeline?refresh=${forceRefresh}`);
     if (res.success && res.assignments) {
+      const prevSig = (state.allAssignments || []).map(a => `${a.id}_${a.isSubmitted}_${a.isGraded}`).join(',');
+      const newSig = (res.assignments || []).map(a => `${a.id}_${a.isSubmitted}_${a.isGraded}`).join(',');
+
       state.allAssignments = res.assignments;
       updateAssignmentMetrics(res.assignments);
       renderSidebarCourses(state.courses); // サイドバーの未提出課題バッジを同期
-      renderAssignmentsList();
+
+      // データに変更があった場合、または初回のみDOMを再描画（無駄なCPU/GPU再計算・リフローを根絶）
+      if (prevSig !== newSig || !document.querySelector('.assignment-card')) {
+        renderAssignmentsList();
+      }
     }
   } catch (err) {
     console.error('Failed to load assignments:', err);

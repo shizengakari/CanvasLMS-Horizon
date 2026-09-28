@@ -185,8 +185,10 @@
    BATTERY SAVER MODE & POWER CONTROLS
    ========================================================================== */
 body.battery-saver * {
+  animation: none !important;
   animation-duration: 0.001ms !important;
   animation-iteration-count: 1 !important;
+  transition: none !important;
   transition-duration: 0.001ms !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
@@ -194,27 +196,31 @@ body.battery-saver * {
   text-shadow: none !important;
 }
 
-/* ヘッダー省電力モードバッジ */
-.header-battery-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  background: rgba(16, 185, 129, 0.12);
-  border: 1px solid rgba(16, 185, 129, 0.28);
-  border-radius: var(--radius-full, 9999px);
-  color: #10b981;
-  font-size: 11.5px;
-  font-weight: 600;
-  cursor: pointer;
-  user-select: none;
+/* 電源・省電力モード切替丸型アイコンボタン */
+.power-mode-btn {
+  position: relative;
   transition: all var(--transition-fast);
 }
 
-.header-battery-badge:hover {
-  background: rgba(16, 185, 129, 0.2);
-  border-color: rgba(16, 185, 129, 0.45);
-  transform: translateY(-1px);
+.power-mode-btn.saving-active {
+  color: #10b981 !important;
+  background: rgba(16, 185, 129, 0.12) !important;
+  border-color: rgba(16, 185, 129, 0.35) !important;
+}
+
+.power-mode-btn.saving-active svg {
+  color: #10b981 !important;
+}
+
+.power-mode-btn:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-main);
+  border-color: var(--border-medium);
+}
+
+.power-mode-btn.saving-active:hover {
+  background: rgba(16, 185, 129, 0.22) !important;
+  border-color: rgba(16, 185, 129, 0.55) !important;
 }
 
 /* 設定画面 電源ステータスピル */
