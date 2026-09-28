@@ -61,7 +61,9 @@ if (!gotTheLock) {
   app.commandLine.appendSwitch('ignore-gpu-blocklist');
   app.commandLine.appendSwitch('enable-gpu-rasterization');
   app.commandLine.appendSwitch('enable-zero-copy');
-  app.commandLine.appendSwitch('enable-features', 'CanvasOopRasterization,SmoothScrolling');
+  app.commandLine.appendSwitch('enable-features', 'CanvasOopRasterization,SmoothScrolling,ResourceLoadScheduler');
+  app.commandLine.appendSwitch('disable-background-timer-throttling', 'false');
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows', 'false');
 
   async function createWindow() {
     try {
@@ -93,6 +95,27 @@ if (!gotTheLock) {
 
       mainWindow.setMenuBarVisibility(false);
       mainWindow.removeMenu();
+
+      // 開発・ローカル実行時はHTTPキャッシュをクリアして常に最新コードを確実に反映
+      if (!app.isPackaged) {
+        try {
+          await mainWindow.webContents.session.clearCache();
+        } catch (_) {}
+      }
+
+      // 開発・テスト時のショートカット（F5 / Ctrl+R でキャッシュ無視リロード、F12 で DevTools）
+      mainWindow.webContents.on('before-input-event', (event, input) => {
+        if (!app.isPackaged) {
+          if (input.key === 'F12' && input.type === 'keyDown') {
+            mainWindow.webContents.toggleDevTools();
+            event.preventDefault();
+          }
+          if (((input.key === 'F5') || (input.control && input.key.toLowerCase() === 'r')) && input.type === 'keyDown') {
+            mainWindow.webContents.reloadIgnoringCache();
+            event.preventDefault();
+          }
+        }
+      });
 
       const targetUrl = `http://localhost:${actualPort}`;
       mainWindow.loadURL(targetUrl);

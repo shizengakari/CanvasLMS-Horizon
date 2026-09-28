@@ -164,21 +164,21 @@
   --shadow-inner: inset 0 1px 0 rgba(255, 255, 255, 0.95);
 }
 
-/* ライトテーマ：お知らせ日付バッジ・投稿者バッジの視認性確保 */
-[data-theme="light"] .announcement-time-badge {
+/* ライトテーマ：メタピルバッジ（日時・配点・投稿者）の視認性確保 */
+[data-theme="light"] .assignment-due-time,
+[data-theme="light"] .announcement-time-badge,
+[data-theme="light"] .assignment-points,
+[data-theme="light"] .announcement-author-badge {
   color: #1e293b;
   background: #f1f5f9;
   border: 1px solid #cbd5e1;
   font-weight: 600;
 }
 
-[data-theme="light"] .announcement-time-badge svg {
+[data-theme="light"] .assignment-due-time svg,
+[data-theme="light"] .announcement-time-badge svg,
+[data-theme="light"] .announcement-author-badge svg {
   color: #475569;
-}
-
-[data-theme="light"] .announcement-author-badge {
-  color: #334155;
-  font-weight: 500;
 }
 
 /* ==========================================================================
@@ -190,6 +190,12 @@ body.battery-saver * {
   -webkit-backdrop-filter: none !important;
   box-shadow: none !important;
   text-shadow: none !important;
+}
+
+/* 不要なマイクロトランジションとホバースタイルの再計算をカットしてCPU/GPU電力を保護 */
+body.battery-saver *:not(.refresh-icon):not(.refresh-check-icon):not(.modal-container):not(.modal-content):not(.toast) {
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
 }
 
 /* 常時ループする装飾目的の背景パルス・グローの抑制 */
@@ -1566,59 +1572,61 @@ a:hover {
   gap: 10px;
 }
 
-/* タイムラインセクション見出し */
+/* タイムラインセクション見出し (ミニマル＆シンプル設計・余計な装飾やアイコンなし) */
 .timeline-section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px 4px 6px;
-  margin-top: 10px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 8px 4px 6px 4px;
+  margin-top: 22px;
+  margin-bottom: 2px;
+  border-bottom: none;
 }
 
 .timeline-section-header:first-child {
-  margin-top: 0;
+  margin-top: 4px;
 }
 
 .timeline-section-title {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
   font-family: var(--font-heading);
   font-size: 13.5px;
   font-weight: 700;
-  letter-spacing: 0.2px;
+  letter-spacing: -0.1px;
+  color: var(--text-main);
 }
 
-.timeline-section-title.urgent {
+.timeline-section-badge {
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+}
+
+.timeline-section-badge.urgent {
+  background: rgba(239, 68, 68, 0.15);
   color: var(--status-urgent);
+  border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
-.timeline-section-title.this-week {
+.timeline-section-badge.this-week {
+  background: rgba(245, 158, 11, 0.15);
   color: var(--status-pending);
-}
-
-.timeline-section-title.later {
-  color: var(--accent-secondary);
-}
-
-.timeline-section-title.submitted {
-  color: var(--status-submitted);
-}
-
-.timeline-section-title.other {
-  color: var(--text-secondary);
+  border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
 .timeline-count-pill {
   font-family: var(--font-mono);
   font-size: 11px;
-  font-weight: 700;
-  padding: 1px 8px;
+  font-weight: 600;
+  padding: 2px 10px;
   border-radius: var(--radius-full);
-  background: var(--bg-input);
+  background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* 課題カード本体 */
@@ -1626,16 +1634,16 @@ a:hover {
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  padding: 16px 20px;
+  padding: 14px 18px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
+  gap: 16px;
   cursor: pointer;
-  transition: background-color var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+  transition: all var(--transition-fast);
   position: relative;
-  box-shadow: var(--shadow-sm);
-  animation: cardFadeIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  animation: cardFadeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
 
 @keyframes cardFadeIn {
@@ -1675,12 +1683,12 @@ a:hover {
 }
 
 .assignment-name {
-  font-family: var(--font-heading);
-  font-size: 15.5px;
+  font-family: var(--font-sans);
+  font-size: 15px;
   font-weight: 700;
   color: var(--text-main);
   line-height: 1.35;
-  letter-spacing: -0.2px;
+  letter-spacing: -0.15px;
 }
 
 .assignment-card:hover .assignment-name {
@@ -1690,45 +1698,54 @@ a:hover {
 .assignment-meta-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   font-size: 12px;
   color: var(--text-secondary);
   flex-wrap: wrap;
 }
 
-/* コース名バッジ */
+/* コース名バッジ (◯っぽくふっくらした美しいピル型デザイン) */
 .assignment-course {
+  font-family: var(--font-sans);
   font-weight: 600;
-  padding: 3px 10px;
-  border-radius: var(--radius-sm);
+  height: 25px;
+  padding: 0 12px;
+  border-radius: var(--radius-full);
   font-size: 11.5px;
   white-space: nowrap;
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
-  letter-spacing: 0.1px;
+  letter-spacing: 0.15px;
   border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  transition: all var(--transition-fast);
 }
 
 /* ==========================================================================
    ADAPTIVE COURSE TAGS & DOTS (Dark & Light Theme High-Contrast Clarity)
    ========================================================================== */
-.course-tag-0 { background: rgba(99, 102, 241, 0.16); border-color: rgba(99, 102, 241, 0.35); color: #c7d2fe; }
+.course-tag-0 { background: rgba(99, 102, 241, 0.18); border-color: rgba(99, 102, 241, 0.38); color: #c7d2fe; }
 [data-theme="light"] .course-tag-0 { background: #eef2ff; border-color: #c7d2fe; color: #3730a3; }
 
-.course-tag-1 { background: rgba(6, 182, 212, 0.16); border-color: rgba(6, 182, 212, 0.35); color: #a5f3fc; }
+.course-tag-1 { background: rgba(6, 182, 212, 0.18); border-color: rgba(6, 182, 212, 0.38); color: #a5f3fc; }
 [data-theme="light"] .course-tag-1 { background: #ecfeff; border-color: #a5f3fc; color: #0e7490; }
 
-.course-tag-2 { background: rgba(16, 185, 129, 0.16); border-color: rgba(16, 185, 129, 0.35); color: #a7f3d0; }
+.course-tag-2 { background: rgba(16, 185, 129, 0.18); border-color: rgba(16, 185, 129, 0.38); color: #a7f3d0; }
 [data-theme="light"] .course-tag-2 { background: #ecfdf5; border-color: #a7f3d0; color: #047857; }
 
-.course-tag-3 { background: rgba(245, 158, 11, 0.16); border-color: rgba(245, 158, 11, 0.35); color: #fde68a; }
+.course-tag-3 { background: rgba(245, 158, 11, 0.18); border-color: rgba(245, 158, 11, 0.38); color: #fde68a; }
 [data-theme="light"] .course-tag-3 { background: #fffbeb; border-color: #fde68a; color: #b45309; }
 
-.course-tag-4 { background: rgba(236, 72, 153, 0.16); border-color: rgba(236, 72, 153, 0.35); color: #fbcfe8; }
+.course-tag-4 { background: rgba(236, 72, 153, 0.18); border-color: rgba(236, 72, 153, 0.38); color: #fbcfe8; }
 [data-theme="light"] .course-tag-4 { background: #fdf2f8; border-color: #fbcfe8; color: #be185d; }
 
-.course-tag-5 { background: rgba(139, 92, 246, 0.16); border-color: rgba(139, 92, 246, 0.35); color: #ddd6fe; }
+.course-tag-5 { background: rgba(139, 92, 246, 0.18); border-color: rgba(139, 92, 246, 0.38); color: #ddd6fe; }
 [data-theme="light"] .course-tag-5 { background: #f5f3ff; border-color: #ddd6fe; color: #6d28d9; }
 
 .course-dot-0 { background-color: #818cf8; }
@@ -1738,29 +1755,51 @@ a:hover {
 .course-dot-4 { background-color: #f472b6; }
 .course-dot-5 { background-color: #a78bfa; }
 
-/* 締切日時 */
+/* 締切日時バッジ (お知らせと同一規格の洗練されたピルバッジ) */
 .assignment-due-time {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
+  gap: 5.5px;
   font-family: var(--font-sans);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11.5px;
+  font-weight: 500;
+  height: 25px;
+  padding: 0 10px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   color: var(--text-main);
+  box-sizing: border-box;
+  white-space: nowrap;
+  letter-spacing: 0.1px;
+  flex-shrink: 0;
 }
 
 .assignment-due-time svg {
-  color: var(--text-muted);
+  color: var(--text-secondary);
+  flex-shrink: 0;
 }
 
+/* 配点バッジ (同一規格のピルバッジ) */
 .assignment-points {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 11.5px;
+  font-weight: 600;
+  height: 25px;
+  padding: 0 10px;
+  border-radius: var(--radius-full);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   color: var(--text-secondary);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  padding: 1px 7px;
-  border-radius: var(--radius-xs);
+  box-sizing: border-box;
+  white-space: nowrap;
+  letter-spacing: 0.1px;
+  flex-shrink: 0;
 }
 
 .assignment-right {
@@ -1770,55 +1809,114 @@ a:hover {
   flex-shrink: 0;
 }
 
-/* 提出ボタン */
+/* 提出ボタン (保存ボタン action-chip-btn と統一規格のピルデザイン・適正サイズ) */
 .btn-submit-action {
-  background: var(--accent-gradient);
-  color: #ffffff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  padding: 7px 15px;
-  border-radius: var(--radius-md);
-  font-size: 12.5px;
-  font-weight: 700;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #e2e8f0;
+  padding: 7px 16px;
+  border-radius: var(--radius-full);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.1px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  box-shadow: 0 2px 10px var(--accent-primary-glow);
+  justify-content: center;
+  gap: 7px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   transition: all var(--transition-fast);
   white-space: nowrap;
+  line-height: 1.2;
 }
 
+[data-theme="light"] .btn-submit-action {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #334155;
+}
+
+.btn-submit-action .btn-icon {
+  width: 14px;
+  height: 14px;
+  color: #cbd5e1;
+  flex-shrink: 0;
+  transition: transform var(--transition-fast);
+}
+
+[data-theme="light"] .btn-submit-action .btn-icon {
+  color: #64748b;
+}
+
+.assignment-card:hover .btn-submit-action,
 .btn-submit-action:hover {
-  background: var(--accent-gradient-hover);
-  box-shadow: var(--shadow-sm);
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #ffffff;
+}
+
+[data-theme="light"] .assignment-card:hover .btn-submit-action,
+[data-theme="light"] .btn-submit-action:hover {
+  background: #e2e8f0;
+  border-color: #94a3b8;
+  color: #0f172a;
+}
+
+.assignment-card:hover .btn-submit-action .btn-icon,
+.btn-submit-action:hover .btn-icon {
+  transform: translateY(-1px);
 }
 
 .btn-view-submission {
-  background: var(--status-submitted-bg);
-  border: 1px solid var(--status-submitted-border);
-  color: var(--status-submitted);
-  padding: 7px 15px;
-  border-radius: var(--radius-md);
-  font-size: 12.5px;
-  font-weight: 700;
+  background: rgba(129, 201, 149, 0.12);
+  border: 1px solid rgba(129, 201, 149, 0.3);
+  color: #81c995;
+  padding: 7px 16px;
+  border-radius: var(--radius-full);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.1px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   transition: all var(--transition-fast);
   white-space: nowrap;
+  line-height: 1.2;
 }
 
-.btn-view-submission:hover {
-  background: rgba(129, 201, 149, 0.28);
-  border-color: var(--status-submitted);
+.btn-view-submission .btn-icon {
+  width: 14px;
+  height: 14px;
+  color: #81c995;
+  flex-shrink: 0;
+  transition: transform var(--transition-fast);
 }
 
 [data-theme="light"] .btn-view-submission {
-  background: #e6f4ea;
-  border-color: rgba(19, 115, 51, 0.4);
-  color: #137333;
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #047857;
 }
 
-[data-theme="light"] .btn-view-submission:hover {
-  background: #ceead6;
+[data-theme="light"] .btn-view-submission .btn-icon {
+  color: #047857;
+}
+
+.assignment-card:hover .btn-view-submission,
+.btn-view-submission:hover {
+  background: rgba(129, 201, 149, 0.25);
+  border-color: #81c995;
+  color: #ffffff;
+}
+
+.assignment-card:hover .btn-view-submission .btn-icon,
+.btn-view-submission:hover .btn-icon {
+  transform: translateY(-1px);
 }
 
 /* ステータスバッジ */
@@ -1904,6 +2002,26 @@ a:hover {
   border-radius: 50%;
   animation: spin 0.75s linear infinite;
 }
+
+/* 講義資料ローディング（画面中央のシンプル表示） */
+.materials-center-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 20px;
+  gap: 14px;
+  text-align: center;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.materials-center-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: -0.1px;
+}
+
 
 /* ==========================================================================
    BUTTON SYSTEM (統一38pxカプセル規格)
@@ -3272,43 +3390,78 @@ a:hover {
 .announcement-header {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   border-bottom: 1px solid var(--border-subtle);
-  padding-bottom: 10px;
+  padding-bottom: 11px;
 }
 
 .announcement-title {
-  font-family: var(--font-heading);
-  font-size: 16px;
+  font-family: var(--font-sans);
+  font-size: 15.5px;
   font-weight: 700;
   color: var(--text-main);
-  line-height: 1.4;
+  line-height: 1.35;
+  letter-spacing: -0.15px;
 }
 
 .announcement-meta-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   font-size: 11.5px;
 }
 
+/* お知らせ日時バッジ (課題と完全同一のピルバッジ規格) */
 .announcement-time-badge {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  color: var(--text-muted);
-  background: rgba(128, 128, 128, 0.12);
-  padding: 2px 8px;
-  border-radius: var(--radius-xs);
-  font-family: var(--font-mono);
+  justify-content: center;
+  gap: 5.5px;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 500;
+  height: 25px;
+  padding: 0 10px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-main);
+  box-sizing: border-box;
+  white-space: nowrap;
+  letter-spacing: 0.1px;
+  flex-shrink: 0;
 }
 
-.announcement-author-badge {
+.announcement-time-badge svg {
   color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+/* 投稿者バッジ (同一規格のピルバッジ) */
+.announcement-author-badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
+  gap: 5px;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 500;
+  height: 25px;
+  padding: 0 10px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary);
+  box-sizing: border-box;
+  white-space: nowrap;
+  letter-spacing: 0.1px;
+  flex-shrink: 0;
+}
+
+.announcement-author-badge svg {
+  color: var(--text-secondary);
+  flex-shrink: 0;
 }
 
 .announcement-body {

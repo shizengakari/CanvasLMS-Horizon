@@ -870,6 +870,10 @@ function switchView(viewName) {
     headerSettingsBtn.classList.toggle('active', viewName === 'settings');
   }
 
+  if (viewName === 'settings' && typeof window.evaluateAppBatterySaving === 'function') {
+    window.evaluateAppBatterySaving();
+  }
+
   // materials 以外のビュー（dashboard 等）ではサイドバー科目の選択状態を解除
   document.querySelectorAll('.sidebar-course-item').forEach(el => {
     const isItemActive = (viewName === 'materials') && el.dataset.courseId && (String(el.dataset.courseId) === String(state.materialsCourseId));
@@ -1094,6 +1098,16 @@ async function setupBatteryManager() {
       evaluateBatterySaving();
     }
   }).catch(() => {});
+
+  // バックグラウンド・最小化時のリソース最適化（非表示時は進行中のアニメーションを完全停止）
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (window._petalAnimId) {
+        cancelAnimationFrame(window._petalAnimId);
+        window._petalAnimId = null;
+      }
+    }
+  });
 
   window.evaluateAppBatterySaving = evaluateBatterySaving;
   evaluateBatterySaving();
@@ -1577,7 +1591,7 @@ function renderAssignmentsList() {
   }
 }
 
-// タイムラインセクション別グルーピング描画
+// タイムラインセクション別グルーピング描画 (アイコンを排した極めてシンプルなタイポグラフィ)
 function renderGroupedTimelineList(container, assignments) {
   const now = new Date();
   const todayEnd = new Date();
@@ -1586,11 +1600,36 @@ function renderGroupedTimelineList(container, assignments) {
   const weekEnd = new Date(todayEnd.getTime() + 7 * 24 * 60 * 1000);
 
   const groups = {
-    urgent: { title: '🔥 今日〜明日締切（要対応）', cls: 'urgent', items: [] },
-    thisWeek: { title: '📅 今週中の課題（7日以内）', cls: 'this-week', items: [] },
-    later: { title: '📌 来週以降の課題', cls: 'later', items: [] },
-    submitted: { title: '✅ 提出済み・採点済み', cls: 'submitted', items: [] },
-    noDue: { title: '⚪ 期限指定なし', cls: 'other', items: [] }
+    urgent: {
+      title: '今日〜明日締切',
+      badge: '要対応',
+      cls: 'urgent',
+      items: []
+    },
+    thisWeek: {
+      title: '今週中の課題',
+      badge: '7日以内',
+      cls: 'this-week',
+      items: []
+    },
+    later: {
+      title: '来週以降の課題',
+      badge: '',
+      cls: 'later',
+      items: []
+    },
+    submitted: {
+      title: '提出済み・採点済み',
+      badge: '',
+      cls: 'submitted',
+      items: []
+    },
+    noDue: {
+      title: '期限指定なし',
+      badge: '',
+      cls: 'other',
+      items: []
+    }
   };
 
   assignments.forEach(a => {
@@ -1619,7 +1658,8 @@ function renderGroupedTimelineList(container, assignments) {
     header.className = 'timeline-section-header';
     header.innerHTML = `
       <div class="timeline-section-title ${grp.cls}">
-        <span>${grp.title}</span>
+        <span class="timeline-section-text">${grp.title}</span>
+        ${grp.badge ? `<span class="timeline-section-badge ${grp.cls}">${grp.badge}</span>` : ''}
       </div>
       <span class="timeline-count-pill">${grp.items.length}件</span>
     `;
@@ -1657,12 +1697,15 @@ function createAssignmentCardElement(a) {
     badgeHtml = `<span class="badge badge-pending">${urgency.text}</span>`;
   }
 
-  // アクションボタン
+  // アクションボタン (保存ボタン action-chip-btn と統一規格のピルデザイン・適正サイズ)
   const actionBtnHtml = a.isSubmitted
-    ? `<button class="btn-view-submission">詳細・再提出</button>`
-    : `<button class="btn-submit-action">
-        <span>提出する</span>
-        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+    ? `<button class="btn-view-submission action-chip-btn action-submitted" title="提出内容を確認">
+        <svg class="btn-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+        <span>提出済</span>
+       </button>`
+    : `<button class="btn-submit-action action-chip-btn action-download" title="課題の提出画面を開く">
+        <svg class="btn-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+        <span>提出</span>
        </button>`;
 
   const cleanCourse = a.cleanCourseName || a.courseName || '科目';
@@ -2458,40 +2501,86 @@ function filterMaterialsInDom(query) {
   });
 }
 
+// クライアント側講義資料キャッシュ管理 (バッテリー節約 & 即時ゼロディレイ表示)
+const CLIENT_MATERIALS_CACHE_TTL = 30 * 60 * 1000; // 30分間有効
+
+function getCachedMaterials(courseId) {
+  const cacheKey = String(courseId);
+  // 1. インメモリキャッシュ
+  if (state.materialsCache.has(cacheKey)) {
+    const entry = state.materialsCache.get(cacheKey);
+    const data = (entry && entry.data) ? entry.data : entry;
+    const time = (entry && entry.timestamp) ? entry.timestamp : 0;
+    if (data && (Date.now() - time < CLIENT_MATERIALS_CACHE_TTL)) {
+      return data;
+    }
+  }
+  // 2. セッションストレージ (タブ/ウィンドウを開いている間の高速復旧)
+  try {
+    const raw = sessionStorage.getItem(`canvas_horizon_materials_${cacheKey}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.data && (Date.now() - (parsed.timestamp || 0) < CLIENT_MATERIALS_CACHE_TTL)) {
+        state.materialsCache.set(cacheKey, parsed);
+        return parsed.data;
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+function setCachedMaterials(courseId, modules) {
+  const cacheKey = String(courseId);
+  const entry = { data: modules, timestamp: Date.now() };
+  state.materialsCache.set(cacheKey, entry);
+  try {
+    sessionStorage.setItem(`canvas_horizon_materials_${cacheKey}`, JSON.stringify(entry));
+  } catch (_) {}
+}
+
 async function loadCourseMaterialsGrouped(courseId, forceRefresh = false) {
   if (!courseId) return;
   const container = document.getElementById('grouped-modules-container');
-  const cacheKey = String(courseId);
+  const targetId = String(courseId);
+  state.materialsCourseId = targetId;
 
-  // キャッシュがあれば即座に描画（白紙・スピナー待ち時間ゼロ！）
-  if (!forceRefresh && state.materialsCache.has(cacheKey)) {
-    const cached = state.materialsCache.get(cacheKey);
-    state.groupedMaterials = cached;
-    renderGroupedMaterials(cached);
-    return;
+  // 1. キャッシュが存在する場合: 0msで即座にパッと描画！(バッテリー消費・通信ゼロ)
+  if (!forceRefresh) {
+    const cached = getCachedMaterials(targetId);
+    if (cached) {
+      state.groupedMaterials = cached;
+      renderGroupedMaterials(cached);
+      return;
+    }
   }
 
-  // 既存データがなく、初回取得の場合のみスピナー表示（インプレイス同期）
-  const hasExistingData = state.materialsCache.has(cacheKey) || (state.groupedMaterials && state.groupedMaterials.length > 0 && String(state.materialsCourseId) === cacheKey);
-  if (!hasExistingData) {
-    container.innerHTML = `
-      <div class="loading-state-card" style="padding: 36px 20px;">
-        <div class="spinner-ring"></div>
-        <span style="font-weight: 600; color: var(--text-secondary);">講義資料を同期中...</span>
-      </div>
-    `;
-  }
+  // 2. キャッシュがない場合: 画面中央にシンプルな同期スピナーを表示
+  container.innerHTML = `
+    <div class="materials-center-loading">
+      <div class="spinner-ring"></div>
+      <span class="materials-center-text">講義資料を同期中...</span>
+    </div>
+  `;
 
   try {
     const res = await api.get(`/api/courses/${courseId}/materials-grouped?refresh=${forceRefresh}`);
+    // 通信中にユーザーが別科目に切り替えていた場合は古い結果を適用しない
+    if (String(state.materialsCourseId) !== targetId) return;
+
     if (res.success && res.modules) {
       state.groupedMaterials = res.modules;
-      state.materialsCache.set(cacheKey, res.modules);
+      setCachedMaterials(targetId, res.modules);
       renderGroupedMaterials(res.modules);
     }
   } catch (err) {
-    if (!state.materialsCache.has(cacheKey)) {
-      container.innerHTML = `<div style="color: var(--status-urgent); padding: 24px;">資料取得エラー: ${utils.escapeHtml(err.message)}</div>`;
+    if (String(state.materialsCourseId) !== targetId) return;
+    const fallback = getCachedMaterials(targetId);
+    if (fallback) {
+      state.groupedMaterials = fallback;
+      renderGroupedMaterials(fallback);
+      showToast('最新資料の取得に失敗したため、キャッシュを表示しています', 'info');
+    } else {
+      container.innerHTML = `<div style="color: var(--status-urgent); padding: 24px; font-weight: 600;">資料取得エラー: ${utils.escapeHtml(err.message)}</div>`;
     }
   }
 }
@@ -3270,14 +3359,24 @@ function renderAnnouncements(announcements) {
     const formattedDate = utils.formatDate(a.postedAt);
     const authorName = a.author || '担当教員';
 
+    const courseId = a.contextCode ? a.contextCode.replace('course_', '') : '';
+    const course = state.courses ? state.courses.find(c => String(c.id) === String(courseId)) : null;
+    const courseName = course ? (course.cleanName || course.name) : '';
+    const courseColor = utils.getCourseColor(courseName || courseId);
+
+    const courseTagHtml = courseName
+      ? `<span class="assignment-course ${courseColor.tagClass}" title="${courseName}">${courseName}</span>`
+      : '';
+
     card.innerHTML = `
       <div class="announcement-header">
         <div class="announcement-title-row">
           <h3 class="announcement-title">${a.title}</h3>
         </div>
         <div class="announcement-meta-row">
+          ${courseTagHtml}
           <span class="announcement-time-badge">
-            <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
             ${formattedDate}
           </span>
           <span class="announcement-author-badge">
@@ -3396,6 +3495,11 @@ function setupSettingsEvents() {
   clearCacheBtn.addEventListener('click', async () => {
     try {
       state.materialsCache.clear();
+      try {
+        Object.keys(sessionStorage).forEach(k => {
+          if (k.startsWith('canvas_horizon_materials_')) sessionStorage.removeItem(k);
+        });
+      } catch (_) {}
       await api.post('/api/cache/clear', {});
       showToast('キャッシュをクリアしました', 'success');
       await loadCourses(true);

@@ -1,6 +1,6 @@
 {
   "name": "canvas-horizon",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Canvas LMS デスクトップクライアント",
   "main": "src/main.js",
   "repository": {
