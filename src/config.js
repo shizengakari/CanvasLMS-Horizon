@@ -30,6 +30,7 @@ function loadConfig() {
     apiToken: '',
     theme: 'dark',
     currentQuarter: '',
+    batteryMode: 'auto', // 'auto' (バッテリー駆動時自動) | 'on' (常時有効) | 'off' (無効)
     batterySaver: false,
     pollIntervalMin: 15,
     autoDownloadFolder: '',
@@ -54,6 +55,13 @@ function loadConfig() {
     }
   }
 
+  // batteryMode と batterySaver の相互互換性
+  if (config.batteryMode === undefined && config.batterySaver !== undefined) {
+    config.batteryMode = config.batterySaver ? 'on' : 'off';
+  } else if (config.batteryMode !== undefined) {
+    config.batterySaver = config.batteryMode === 'on';
+  }
+
   // 3. 環境変数（CI/CD またはローカル開発用）からの補完
   if (!config.baseUrl && process.env.CANVAS_BASE_URL) {
     config.baseUrl = process.env.CANVAS_BASE_URL;
@@ -74,6 +82,11 @@ function saveConfig(newConfig) {
   try {
     const current = loadConfig();
     const merged = { ...current, ...newConfig };
+    if (newConfig.batteryMode !== undefined) {
+      merged.batterySaver = newConfig.batteryMode === 'on';
+    } else if (newConfig.batterySaver !== undefined) {
+      merged.batteryMode = newConfig.batterySaver ? 'on' : 'off';
+    }
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2), 'utf-8');
     return true;
   } catch (err) {

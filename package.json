@@ -1,6 +1,6 @@
 {
   "name": "canvas-horizon",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Canvas LMS デスクトップクライアント",
   "main": "src/main.js",
   "repository": {
@@ -11,6 +11,7 @@
     "start": "electron .",
     "web": "node src/server.js",
     "dev": "electron .",
+    "test": "node --test",
     "dist": "electron-builder --win",
     "build": "electron-packager . \"Canvas Horizon\" --platform=win32 --arch=x64 --icon=app.ico --out=build --overwrite --prune=true --asar",
     "pack-zip": "electron-packager . \"Canvas Horizon\" --platform=win32 --arch=x64 --icon=app.ico --out=build --overwrite --prune=true --asar && powershell -NoProfile -Command \"Compress-Archive -Path 'build\\Canvas Horizon-win32-x64\\*' -DestinationPath 'Canvas-Horizon-Windows-x64.zip' -Force\""

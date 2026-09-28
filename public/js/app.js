@@ -11,6 +11,7 @@ const state = {
   selectedCourseId: 'all',
   allAssignments: [],
   groupedMaterials: [],
+  materialsCache: new Map(), // コースID -> 講義資料のインメモリキャッシュ
   announcements: [],
   activeView: 'dashboard',
   assignmentFilter: 'unsubmitted', // デフォルトは未提出課題を表示
@@ -22,7 +23,10 @@ const state = {
   currentModalAssignment: null,
   filesQueue: [],
   isSubmitting: false,
-  materialsCourseId: null
+  materialsCourseId: null,
+  batteryMode: 'auto', // 'auto' | 'on' | 'off'
+  isBatterySaving: false,
+  isOnBattery: false
 };
 
 // ユーティリティ関数群
@@ -799,6 +803,96 @@ function setupTheme() {
   }
 }
 
+// バッテリー・省電力マネージャー
+let batteryManagerInitialized = false;
+async function setupBatteryManager() {
+  if (batteryManagerInitialized) return;
+  batteryManagerInitialized = true;
+
+  const badge = document.getElementById('header-battery-badge');
+  const powerIndicator = document.getElementById('power-status-indicator');
+  const powerText = document.getElementById('power-status-text');
+
+  function updateBatteryUi() {
+    const isSaving = state.isBatterySaving;
+    document.body.classList.toggle('battery-saver', isSaving);
+    if (badge) {
+      badge.style.display = isSaving ? 'inline-flex' : 'none';
+    }
+    if (powerIndicator && powerText) {
+      powerIndicator.classList.toggle('on-battery', state.isOnBattery);
+      powerText.textContent = state.isOnBattery ? 'バッテリー駆動' : '電源に接続中';
+    }
+
+    // 設定画面のセグメントボタン
+    document.querySelectorAll('.battery-segment-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.batteryMode === state.batteryMode);
+    });
+  }
+
+  function evaluateBatterySaving() {
+    if (state.batteryMode === 'on') {
+      state.isBatterySaving = true;
+    } else if (state.batteryMode === 'off') {
+      state.isBatterySaving = false;
+    } else {
+      // 'auto': バッテリー駆動時に自動で省電力モード
+      state.isBatterySaving = Boolean(state.isOnBattery);
+    }
+    updateBatteryUi();
+  }
+
+  // 1. Electron Native powerMonitor の確認
+  if (window.desktopAPI && typeof window.desktopAPI.getPowerState === 'function') {
+    try {
+      const pState = await window.desktopAPI.getPowerState();
+      state.isOnBattery = Boolean(pState?.onBattery);
+    } catch (e) {}
+
+    if (typeof window.desktopAPI.onPowerStateChange === 'function') {
+      window.desktopAPI.onPowerStateChange((data) => {
+        state.isOnBattery = Boolean(data?.onBattery);
+        evaluateBatterySaving();
+      });
+    }
+  } else if (navigator.getBattery) {
+    // 2. ブラウザ標準 Battery Status API
+    try {
+      const b = await navigator.getBattery();
+      state.isOnBattery = !b.charging;
+      b.addEventListener('chargingchange', () => {
+        state.isOnBattery = !b.charging;
+        evaluateBatterySaving();
+      });
+    } catch (e) {}
+  }
+
+  // ヘッダーバッジクリックで設定画面のバッテリー設定へジャンプ
+  if (badge) {
+    badge.addEventListener('click', () => {
+      switchView('settings');
+      document.getElementById('battery-segmented-control')?.scrollIntoView({ behavior: 'smooth' });
+    });
+  }
+
+  // 設定画面のセグメントボタンイベント登録
+  document.querySelectorAll('.battery-segment-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const mode = btn.dataset.batteryMode;
+      state.batteryMode = mode;
+      evaluateBatterySaving();
+      try {
+        await api.post('/api/config', { batteryMode: mode });
+      } catch (e) {
+        console.warn('Failed to persist battery mode:', e);
+      }
+    });
+  });
+
+  window.evaluateAppBatterySaving = evaluateBatterySaving;
+  evaluateBatterySaving();
+}
+
 // 学期・クォーターの表示インジケーター更新
 function updateQuarterIndicators() {
   const currentQ = state.currentQuarter || '';
@@ -868,6 +962,7 @@ async function triggerRefresh(force = true) {
 async function initApp() {
   setupNavigation();
   setupTheme();
+  setupBatteryManager();
   setupModalEvents();
   setupCommandPalette();
   setupSettingsEvents();
@@ -887,6 +982,10 @@ async function initApp() {
       state.config = meRes.config;
       if (meRes.config && meRes.config.currentQuarter !== undefined) {
         state.currentQuarter = meRes.config.currentQuarter;
+      }
+      if (meRes.config && meRes.config.batteryMode !== undefined) {
+        state.batteryMode = meRes.config.batteryMode;
+        if (window.evaluateAppBatterySaving) window.evaluateAppBatterySaving();
       }
       if (meRes.config && meRes.config.theme) {
         applyTheme(meRes.config.theme, false, false);
@@ -974,14 +1073,26 @@ async function initApp() {
     refreshBtn.addEventListener('click', () => triggerRefresh(true));
   }
 
-  // 3. アプリ起動時の自動同期
-  setTimeout(() => {
-    triggerRefresh(true);
-  }, 120);
+  // 3. アプリ起動時の自動同期（SWRパターン: キャッシュを即時利用してスピナー待機を解消）
+  setTimeout(async () => {
+    // キャッシュ優先で高速描画（スピナー待ちゼロ）
+    await syncAllData(false);
+
+    // 初回ロードで課題が0件、または前回の同期から15分以上経過している場合のみバックグラウンドで最新同期
+    const needsBackgroundSync = (!state.allAssignments || state.allAssignments.length === 0) ||
+                                (Date.now() - lastSyncTimestamp > 15 * 60 * 1000);
+    if (needsBackgroundSync && !state.isBatterySaving) {
+      triggerRefresh(false);
+    }
+  }, 50);
 
   // 4. ウィンドウフォーカス復帰時 & 可視化時の自動同期
   const onWindowActive = () => {
-    if (Date.now() - lastSyncTimestamp > 3 * 60 * 1000) {
+    // 省電力モード中はフォーカス復帰時の自動同期を完全停止（手動の更新ボタンのみ）
+    if (state.isBatterySaving) return;
+
+    // 講義中のアプリ切り替えを考慮し、15分以上経過している場合のみ同期
+    if (Date.now() - lastSyncTimestamp > 15 * 60 * 1000) {
       triggerRefresh(false);
     }
   };
@@ -992,8 +1103,10 @@ async function initApp() {
 
   // 5. 定期バックグラウンド自動同期
   setInterval(() => {
+    // 省電力モード中、またはウィンドウ非表示（最小化時など）は定期同期をスキップ
+    if (state.isBatterySaving || document.visibilityState === 'hidden') return;
     triggerRefresh(false);
-  }, 10 * 60 * 1000);
+  }, 15 * 60 * 1000);
 }
 
 function renderProfile(profile) {
@@ -1079,7 +1192,7 @@ function renderSidebarCourses(courses) {
       const select = document.getElementById('material-course-select');
       if (select) select.value = c.id;
       switchView('materials');
-      loadCourseMaterialsGrouped(c.id);
+      loadCourseMaterialsGrouped(c.id, false);
     });
 
     list.appendChild(item);
@@ -2153,21 +2266,38 @@ function filterMaterialsInDom(query) {
 async function loadCourseMaterialsGrouped(courseId, forceRefresh = false) {
   if (!courseId) return;
   const container = document.getElementById('grouped-modules-container');
-  container.innerHTML = `
-    <div class="loading-state-card" style="padding: 36px 20px;">
-      <div class="spinner-ring"></div>
-      <span style="font-weight: 600; color: var(--text-secondary);">講義資料を同期中...</span>
-    </div>
-  `;
+  const cacheKey = String(courseId);
+
+  // キャッシュがあれば即座に描画（白紙・スピナー待ち時間ゼロ！）
+  if (!forceRefresh && state.materialsCache.has(cacheKey)) {
+    const cached = state.materialsCache.get(cacheKey);
+    state.groupedMaterials = cached;
+    renderGroupedMaterials(cached);
+    return;
+  }
+
+  // 既存データがなく、初回取得の場合のみスピナー表示（インプレイス同期）
+  const hasExistingData = state.materialsCache.has(cacheKey) || (state.groupedMaterials && state.groupedMaterials.length > 0 && String(state.materialsCourseId) === cacheKey);
+  if (!hasExistingData) {
+    container.innerHTML = `
+      <div class="loading-state-card" style="padding: 36px 20px;">
+        <div class="spinner-ring"></div>
+        <span style="font-weight: 600; color: var(--text-secondary);">講義資料を同期中...</span>
+      </div>
+    `;
+  }
 
   try {
     const res = await api.get(`/api/courses/${courseId}/materials-grouped?refresh=${forceRefresh}`);
     if (res.success && res.modules) {
       state.groupedMaterials = res.modules;
+      state.materialsCache.set(cacheKey, res.modules);
       renderGroupedMaterials(res.modules);
     }
   } catch (err) {
-    container.innerHTML = `<div style="color: var(--status-urgent); padding: 24px;">資料取得エラー: ${err.message}</div>`;
+    if (!state.materialsCache.has(cacheKey)) {
+      container.innerHTML = `<div style="color: var(--status-urgent); padding: 24px;">資料取得エラー: ${utils.escapeHtml(err.message)}</div>`;
+    }
   }
 }
 
@@ -3027,7 +3157,13 @@ function setupSettingsEvents() {
 
     try {
       const theme = document.documentElement.getAttribute('data-theme') || 'dark';
-      const res = await api.post('/api/config', { baseUrl, apiToken, currentQuarter, theme });
+      const res = await api.post('/api/config', {
+        baseUrl,
+        apiToken,
+        currentQuarter,
+        theme,
+        batteryMode: state.batteryMode
+      });
       if (res.success) {
         state.currentQuarter = currentQuarter;
         updateQuarterIndicators();
@@ -3056,6 +3192,7 @@ function setupSettingsEvents() {
 
   clearCacheBtn.addEventListener('click', async () => {
     try {
+      state.materialsCache.clear();
       await api.post('/api/cache/clear', {});
       showToast('キャッシュをクリアしました', 'success');
       await loadCourses(true);
@@ -3349,7 +3486,7 @@ function setupCommandPalette() {
             const matSelect = document.getElementById('material-course-select');
             if (matSelect) matSelect.value = c.id;
             switchView('materials');
-            loadCourseMaterialsGrouped(c.id);
+            loadCourseMaterialsGrouped(c.id, false);
           }
         });
       }

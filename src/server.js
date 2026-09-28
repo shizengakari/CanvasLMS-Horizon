@@ -57,12 +57,16 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// 静的ファイルの提供（UIアセットの変更が即時反映されるようCache-Controlを設定）
+// 静的ファイルの提供（HTMLは即時反映、CSS/JS/画像/フォント等はキャッシュしてディスクI/OとCPU負荷を低減）
 app.use(express.static(path.join(__dirname, '..', 'public'), {
-  etag: false,
-  maxAge: 0,
-  setHeaders: (res) => {
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  etag: true,
+  maxAge: '1h',
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html')) {
+      res.set('Cache-Control', 'no-cache, must-revalidate');
+    } else {
+      res.set('Cache-Control', 'public, max-age=3600');
+    }
   }
 }));
 
@@ -81,6 +85,7 @@ app.get('/api/me', async (req, res) => {
         isConfigured,
         theme: config.theme,
         currentQuarter: config.currentQuarter || '',
+        batteryMode: config.batteryMode || (config.batterySaver ? 'on' : 'auto'),
         batterySaver: config.batterySaver,
         pollIntervalMin: config.pollIntervalMin || 15
       }
@@ -668,16 +673,30 @@ app.get('/api/config', (req, res) => {
 
 app.post('/api/config', (req, res) => {
   try {
+    const current = loadConfig();
+    const isCredentialsChanged = Boolean(
+      (req.body.baseUrl !== undefined && req.body.baseUrl !== current.baseUrl) ||
+      (req.body.apiToken !== undefined && req.body.apiToken !== current.apiToken) ||
+      (req.body.currentQuarter !== undefined && req.body.currentQuarter !== current.currentQuarter)
+    );
+
     const success = saveConfig(req.body);
-    // キャッシュクリア
-    canvasService.cache = {
-      courses: null,
-      coursesTime: 0,
-      assignments: new Map(),
-      modules: new Map(),
-      files: new Map()
-    };
-    res.json({ success });
+
+    // 認証情報または学期フィルターが変更された場合のみキャッシュを初期化
+    if (isCredentialsChanged) {
+      canvasService.clearAllCache(true);
+    }
+    res.json({ success, config: loadConfig() });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// キャッシュ強制クリアAPI
+app.post('/api/cache/clear', (req, res) => {
+  try {
+    canvasService.clearAllCache(true);
+    res.json({ success: true, message: 'キャッシュをクリアしました' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

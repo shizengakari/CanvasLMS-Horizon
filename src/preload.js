@@ -33,5 +33,13 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   // 自動アップデート状態の受信リスナー
   onUpdateStatus: (callback) => {
     ipcRenderer.on('update-status', (event, data) => callback(data));
+  },
+
+  // 電源・バッテリー状態の取得
+  getPowerState: () => ipcRenderer.invoke('get-power-state'),
+
+  // 電源状態変化リスナー
+  onPowerStateChange: (callback) => {
+    ipcRenderer.on('power-state-change', (event, data) => callback(data));
   }
 });

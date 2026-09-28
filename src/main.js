@@ -3,7 +3,7 @@
  * デスクトップウィンドウのライフサイクル、ネイティブUI、IPC通信を管理します。
  */
 
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, powerMonitor, powerSaveBlocker } = require('electron');
 const path = require('path');
 
 // ネイティブメニューバーの無効化
@@ -57,12 +57,11 @@ if (!gotTheLock) {
     }
   });
 
-  // レンダリング最適化フラグの設定
+  // レンダリング最適化フラグの設定（バックグラウンドスロットリングを有効化してバッテリーを保護）
   app.commandLine.appendSwitch('ignore-gpu-blocklist');
   app.commandLine.appendSwitch('enable-gpu-rasterization');
   app.commandLine.appendSwitch('enable-zero-copy');
   app.commandLine.appendSwitch('enable-features', 'CanvasOopRasterization,SmoothScrolling');
-  app.commandLine.appendSwitch('disable-background-timer-throttling');
 
   async function createWindow() {
     try {
@@ -84,7 +83,7 @@ if (!gotTheLock) {
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
-          backgroundThrottling: false, // バックグラウンドでも同期やタイマーが滞りなく動作
+          backgroundThrottling: true, // バックグラウンド時に適切にスロットリングしてCPU・バッテリー消費を大幅削減
           plugins: true,
           preload: path.join(__dirname, 'preload.js')
         },
@@ -202,7 +201,42 @@ if (!gotTheLock) {
     return await shell.openExternal(url);
   });
 
-  ipcMain.on('downloads-active', (event, active) => { downloadsActive = Boolean(active); });
+  let powerSaveBlockerId = null;
+  ipcMain.on('downloads-active', (event, active) => {
+    downloadsActive = Boolean(active);
+    if (downloadsActive) {
+      if (powerSaveBlockerId === null || !powerSaveBlocker.isStarted(powerSaveBlockerId)) {
+        powerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+      }
+    } else {
+      if (powerSaveBlockerId !== null && powerSaveBlocker.isStarted(powerSaveBlockerId)) {
+        powerSaveBlocker.stop(powerSaveBlockerId);
+        powerSaveBlockerId = null;
+      }
+    }
+  });
+
+  // 電源状態の取得ハンドラ
+  ipcMain.handle('get-power-state', () => {
+    try {
+      return { onBattery: powerMonitor.isOnBatteryPower() };
+    } catch (e) {
+      return { onBattery: false };
+    }
+  });
+
+  // OS電源状態変化イベントのリッスン
+  powerMonitor.on('on-battery', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('power-state-change', { onBattery: true });
+    }
+  });
+  powerMonitor.on('on-ac', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('power-state-change', { onBattery: false });
+    }
+  });
+
   ipcMain.on('app-relaunch', () => {
     app.relaunch();
     app.exit(0);

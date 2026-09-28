@@ -83,9 +83,13 @@ class CanvasService {
       assignments: new Map(),
       modules: new Map(),
       files: new Map(),
+      groupedMaterials: new Map(), // 授業回別講義資料のキャッシュ
       resolvedUrls: new Map()
     };
-    this.CACHE_TTL = 3 * 60 * 1000; // 3分メモリキャッシュ（高速応答）
+    // バッテリー消費削減のため、キャッシュ有効期間を現実的な講義サイクルに合わせて最適化
+    this.CACHE_TTL = 15 * 60 * 1000; // 15分（課題一覧など）
+    this.COURSES_CACHE_TTL = 60 * 60 * 1000; // 60分（コース一覧）
+    this.MATERIALS_CACHE_TTL = 30 * 60 * 1000; // 30分（講義資料モジュール）
     this.queue = new RequestQueue(4); // Canvas APIへの同時リクエスト数を4に制御して安定性を最大化
     this.inflightRequests = new Map(); // 重複GETリクエストのデデュープ
     this._saveCacheTimer = null;
@@ -119,6 +123,11 @@ class CanvasService {
               this.cache.assignments.set(k, v);
             }
           }
+          if (parsed.groupedMaterials && typeof parsed.groupedMaterials === 'object') {
+            for (const [k, v] of Object.entries(parsed.groupedMaterials)) {
+              this.cache.groupedMaterials.set(k, v);
+            }
+          }
         }
       }
     } catch (e) {
@@ -135,19 +144,52 @@ class CanvasService {
         for (const [k, v] of this.cache.assignments.entries()) {
           assignmentsObj[k] = v;
         }
+        const groupedMaterialsObj = {};
+        for (const [k, v] of this.cache.groupedMaterials.entries()) {
+          groupedMaterialsObj[k] = v;
+        }
         const data = {
           profile: this.cache.profile,
           courses: this.cache.courses,
           coursesTime: this.cache.coursesTime,
           allAssignments: this.cache.allAssignments,
           allAssignmentsTime: this.cache.allAssignmentsTime,
-          assignments: assignmentsObj
+          assignments: assignmentsObj,
+          groupedMaterials: groupedMaterialsObj
         };
         fs.writeFileSync(this.cacheFilePath, JSON.stringify(data), 'utf-8');
       } catch (e) {
         console.warn('Failed to save disk cache:', e.message);
       }
     }, 800);
+  }
+
+  // 全キャッシュのクリア（メモリ・ディスク両方）
+  clearAllCache(keepProfile = true) {
+    const profile = keepProfile ? this.cache.profile : null;
+    this.cache = {
+      profile,
+      courses: null,
+      coursesTime: 0,
+      allAssignments: null,
+      allAssignmentsTime: 0,
+      assignments: new Map(),
+      modules: new Map(),
+      files: new Map(),
+      groupedMaterials: new Map(),
+      resolvedUrls: new Map()
+    };
+    try {
+      if (fs.existsSync(this.cacheFilePath)) {
+        if (profile) {
+          fs.writeFileSync(this.cacheFilePath, JSON.stringify({ profile }, null, 2), 'utf-8');
+        } else {
+          fs.unlinkSync(this.cacheFilePath);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to clear cache file:', e.message);
+    }
   }
 
   getConfig() {
@@ -288,7 +330,7 @@ class CanvasService {
   // アクティブなコース一覧の取得
   async getCourses(forceRefresh = false) {
     const now = Date.now();
-    if (!forceRefresh && this.cache.courses && (now - this.cache.coursesTime < this.CACHE_TTL)) {
+    if (!forceRefresh && this.cache.courses && (now - this.cache.coursesTime < this.COURSES_CACHE_TTL)) {
       return this.cache.courses;
     }
 
@@ -635,6 +677,15 @@ class CanvasService {
 
   // 授業回（モジュール）ごとにグループ化された講義資料を取得
   async getCourseMaterialsGrouped(courseId, forceRefresh = false) {
+    const cacheKey = String(courseId);
+    const cached = this.cache.groupedMaterials.get(cacheKey);
+    const now = Date.now();
+
+    // キャッシュが有効なら即時返却（通信・CPU・バッテリー消費を完全抑制）
+    if (!forceRefresh && cached && (now - cached.time < this.MATERIALS_CACHE_TTL)) {
+      return cached.data;
+    }
+
     const [modules, files, assignments] = await Promise.all([
       this.getModules(courseId, forceRefresh),
       this.getCourseFiles(courseId, forceRefresh),
@@ -752,6 +803,8 @@ class CanvasService {
       });
     }
 
+    this.cache.groupedMaterials.set(cacheKey, { time: now, data: grouped });
+    this.saveDiskCacheDebounced();
     return grouped;
   }
 

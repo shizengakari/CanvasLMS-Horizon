@@ -104,6 +104,12 @@
             </section>
           </div>
 
+          <!-- バッテリー省電力バッジ -->
+          <div class="header-battery-badge" id="header-battery-badge" style="display: none;" title="省電力モード動作中 (クリックで設定を開く)">
+            <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            <span>省電力モード</span>
+          </div>
+
           <!-- テーマ切り替えボタン -->
           <button class="icon-btn theme-toggle-btn" id="btn-theme-toggle" title="外観テーマ切り替え (ダーク / ライト)">
             <svg id="theme-moon-icon" width="17" height="17" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
@@ -330,12 +336,40 @@
               </div>
             </div>
 
+            <!-- バッテリーとパフォーマンス（大学講義・外出時向け） -->
+            <div class="setting-item" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border-subtle);">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                <label class="setting-label" style="margin-bottom: 0;">バッテリーと省電力モード</label>
+                <span class="power-status-pill" id="power-status-indicator">
+                  <span class="power-status-dot"></span>
+                  <span id="power-status-text">電源確認中...</span>
+                </span>
+              </div>
+              <div class="battery-segmented-control" id="battery-segmented-control">
+                <button type="button" class="battery-segment-btn active" data-battery-mode="auto" id="battery-btn-auto" title="バッテリー駆動時に自動で省電力モードに移行">
+                  <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                  <span>自動 (推奨)</span>
+                </button>
+                <button type="button" class="battery-segment-btn" data-battery-mode="on" id="battery-btn-on" title="常に省電力モードで動作（バッテリー最大化）">
+                  <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                  <span>常に省電力</span>
+                </button>
+                <button type="button" class="battery-segment-btn" data-battery-mode="off" id="battery-btn-off" title="省電力を無効化（フルパフォーマンス）">
+                  <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/></svg>
+                  <span>オフ</span>
+                </button>
+              </div>
+              <span style="font-size: 11.5px; color: var(--text-muted); margin-top: 6px; display: block;">
+                省電力モード時は、不要なバックグラウンド通信や自動同期を抑制し、GPU描画を軽量化して講義中のバッテリー持続時間を大幅に向上させます。
+              </span>
+            </div>
+
             <!-- アプリバージョンおよびアップデート管理 -->
             <div class="setting-item" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border-subtle);">
               <label class="setting-label">バージョンとアップデート</label>
               <div class="setting-update-card" id="setting-update-card">
                 <div class="update-card-left">
-                  <div class="update-app-title">Canvas Horizon <span class="update-version-tag" id="app-current-version">v1.0.3</span></div>
+                  <div class="update-app-title">Canvas Horizon <span class="update-version-tag" id="app-current-version">v1.0.4</span></div>
                   <div class="update-app-desc" id="update-status-desc">最新バージョンです</div>
                 </div>
                 <div class="update-card-right">
