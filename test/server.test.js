@@ -64,7 +64,7 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     const res = await fetch(`${baseUrl}/api/app/check-update`);
     assert.strictEqual(res.status, 200);
     const data = await res.json();
-    assert.ok(data.currentVersion.startsWith('v1.0.'), `currentVersion should start with v1.0, got: ${data.currentVersion}`);
+    assert.ok(data.currentVersion.startsWith('v1.1.'), `currentVersion should start with v1.1, got: ${data.currentVersion}`);
     assert.ok(data.checkedAt, 'Response should include checkedAt timestamp');
     assert.strictEqual(typeof data.hasUpdate, 'boolean');
     assert.ok('asarUrl' in data, 'Response should include asarUrl property');
