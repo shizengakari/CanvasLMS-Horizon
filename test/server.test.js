@@ -64,23 +64,24 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     const res = await fetch(`${baseUrl}/api/app/check-update`);
     assert.strictEqual(res.status, 200);
     const data = await res.json();
-    assert.ok(data.currentVersion.startsWith('v1.0.'), `currentVersion should start with v1.0, got: ${data.currentVersion}`);
+    assert.ok(data.currentVersion.startsWith('v1.'), `currentVersion should start with v1., got: ${data.currentVersion}`);
     assert.ok(data.checkedAt, 'Response should include checkedAt timestamp');
     assert.strictEqual(typeof data.hasUpdate, 'boolean');
     assert.ok('downloadUrl' in data, 'Response should include downloadUrl property');
     assert.ok('zipUrl' in data, 'Response should include zipUrl property');
   });
 
-  it('should correctly compare semver across multiple version skips (e.g. 1.0.8 -> 1.0.11)', () => {
+  it('should correctly compare semver across multiple version skips (e.g. 1.0.8 -> 1.0.11 -> 1.1.0)', () => {
     const { compareSemver } = require('../src/server');
     // 2つ以上前のバージョンからのアップデート判定
     assert.strictEqual(compareSemver('v1.0.11', 'v1.0.8'), 1, 'v1.0.11 should be newer than v1.0.8');
     assert.strictEqual(compareSemver('v1.0.11', 'v1.0.9'), 1, 'v1.0.11 should be newer than v1.0.9');
     assert.strictEqual(compareSemver('v1.0.11', 'v1.0.10'), 1, 'v1.0.11 should be newer than v1.0.10');
+    assert.strictEqual(compareSemver('v1.1.0', 'v1.0.11'), 1, 'v1.1.0 should be newer than v1.0.11');
     // 同一バージョン
-    assert.strictEqual(compareSemver('v1.0.11', 'v1.0.11'), 0, 'v1.0.11 should be equal to v1.0.11');
+    assert.strictEqual(compareSemver('v1.1.0', 'v1.1.0'), 0, 'v1.1.0 should be equal to v1.1.0');
     // 将来バージョン
-    assert.strictEqual(compareSemver('v1.0.11', 'v1.0.12'), -1, 'v1.0.11 should be older than v1.0.12');
+    assert.strictEqual(compareSemver('v1.1.0', 'v1.1.1'), -1, 'v1.1.0 should be older than v1.1.1');
   });
 
   it('should ensure battery saver CSS preserves refresh button and spinner animations', async () => {

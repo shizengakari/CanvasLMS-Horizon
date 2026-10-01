@@ -80,7 +80,7 @@ app.use(express.static(path.join(__dirname, '..', 'public'), {
   etag: true,
   maxAge: '1h',
   setHeaders: (res, filePath) => {
-    if (filePath.endsWith('.html')) {
+    if (filePath.endsWith('.html') || filePath.endsWith('sw.js') || filePath.endsWith('manifest.json')) {
       res.set('Cache-Control', 'no-cache, must-revalidate');
     } else {
       res.set('Cache-Control', 'public, max-age=3600');
@@ -845,6 +845,15 @@ app.post('/api/open-path', (req, res) => {
   res.json({ success: true });
 });
 
+// ダウンロードフォルダを開く
+app.post('/api/open-downloads', (req, res) => {
+  const downloadsDir = path.join(os.homedir(), 'Downloads');
+  exec(`explorer.exe "${downloadsDir}"`, (err) => {
+    if (err) console.error('Failed to open downloads:', err);
+  });
+  res.json({ success: true });
+});
+
 // 14. YouTube動画のダウンロード（yt-dlp連携）
 app.get('/api/youtube/downloads', (req, res) => {
   res.json({ success: true, downloads: [...downloadJobs.values()].filter(j => j.type === 'youtube').map(publicDownloadJob) });
@@ -1099,7 +1108,7 @@ app.get('/api/app/check-update', async (req, res) => {
       });
     }
   } catch (err) {
-    let fallbackVer = 'v1.0.11';
+    let fallbackVer = 'v1.1.0';
     try { fallbackVer = `v${require('../package.json').version}`; } catch (e) {}
     return res.json({
       success: false,

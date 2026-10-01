@@ -3905,10 +3905,10 @@ function showUpdateModal(updateData) {
   if (!modal) return;
 
   const curVerEl = document.getElementById('update-modal-current-ver');
-  if (curVerEl) curVerEl.textContent = updateData.currentVersion || 'v1.0.10';
+  if (curVerEl) curVerEl.textContent = updateData.currentVersion || 'v1.1.0';
 
   const latestVerEl = document.getElementById('update-modal-latest-ver');
-  if (latestVerEl) latestVerEl.textContent = updateData.latestVersion || 'v1.0.11';
+  if (latestVerEl) latestVerEl.textContent = updateData.latestVersion || 'v1.1.0';
 
   const dateEl = document.getElementById('update-modal-date');
   if (dateEl) {
