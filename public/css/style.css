@@ -3,8 +3,6 @@
    High Contrast, Crystal Clarity, Authentic Surface Tonal Elevation
    ========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Roboto:wght@400;500;700&display=swap');
-
 :root {
   /* ========================================================================
      GOOGLE MATERIAL 3: DARK THEME (Surface #131314)
@@ -1644,6 +1642,9 @@ a:hover {
   position: relative;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   animation: cardFadeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  contain: content;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 74px;
 }
 
 @keyframes cardFadeIn {
@@ -1809,11 +1810,11 @@ a:hover {
   flex-shrink: 0;
 }
 
-/* 提出ボタン (保存ボタン action-chip-btn と統一規格のピルデザイン・適正サイズ) */
+/* 提出ボタン (科目タブのように青っぽいアクセントカラー・ピルデザイン) */
 .btn-submit-action {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  color: #e2e8f0;
+  background: rgba(138, 180, 248, 0.14);
+  border: 1px solid rgba(138, 180, 248, 0.38);
+  color: #8ab4f8;
   padding: 7px 16px;
   border-radius: var(--radius-full);
   font-family: var(--font-sans);
@@ -1832,35 +1833,37 @@ a:hover {
 }
 
 [data-theme="light"] .btn-submit-action {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-  color: #334155;
+  background: rgba(26, 115, 232, 0.1);
+  border-color: rgba(26, 115, 232, 0.35);
+  color: #1a73e8;
 }
 
 .btn-submit-action .btn-icon {
   width: 14px;
   height: 14px;
-  color: #cbd5e1;
+  color: #8ab4f8;
   flex-shrink: 0;
   transition: transform var(--transition-fast);
 }
 
 [data-theme="light"] .btn-submit-action .btn-icon {
-  color: #64748b;
+  color: #1a73e8;
 }
 
 .assignment-card:hover .btn-submit-action,
 .btn-submit-action:hover {
-  background: rgba(255, 255, 255, 0.16);
-  border-color: rgba(255, 255, 255, 0.35);
-  color: #ffffff;
+  background: rgba(138, 180, 248, 0.26);
+  border-color: #8ab4f8;
+  color: #d2e3fc;
+  box-shadow: 0 2px 8px rgba(138, 180, 248, 0.25);
 }
 
 [data-theme="light"] .assignment-card:hover .btn-submit-action,
 [data-theme="light"] .btn-submit-action:hover {
-  background: #e2e8f0;
-  border-color: #94a3b8;
-  color: #0f172a;
+  background: rgba(26, 115, 232, 0.18);
+  border-color: #1a73e8;
+  color: #1557b0;
+  box-shadow: 0 2px 8px rgba(26, 115, 232, 0.2);
 }
 
 .assignment-card:hover .btn-submit-action .btn-icon,
@@ -2123,6 +2126,7 @@ a:hover {
   overflow: hidden;
   transition: all var(--transition-fast);
   box-shadow: var(--shadow-sm);
+  contain: style layout;
 }
 
 .module-group:hover {
@@ -3380,6 +3384,9 @@ a:hover {
   gap: 12px;
   transition: all var(--transition-fast);
   box-shadow: var(--shadow-sm);
+  contain: content;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 120px;
 }
 
 .announcement-card:hover {

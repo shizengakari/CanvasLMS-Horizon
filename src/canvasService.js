@@ -100,6 +100,51 @@ class CanvasService {
     }
     this.cacheFilePath = path.join(userDir, 'cache.json');
     this.loadDiskCache();
+
+    // 15分ごとに期限切れインメモリキャッシュを自動パージしてメモリを最小化
+    const cleanupInterval = setInterval(() => this.cleanExpiredEntries(), 15 * 60 * 1000);
+    if (cleanupInterval.unref) cleanupInterval.unref();
+  }
+
+  // LRUキャッシュ設定ヘルパー（上限を超えた古いエントリを破棄してメモリリーク防止）
+  setLru(map, key, value, max = 60) {
+    if (!map) return;
+    if (map.has(key)) map.delete(key);
+    map.set(key, value);
+    if (map.size > max) {
+      const firstKey = map.keys().next().value;
+      if (firstKey !== undefined) map.delete(firstKey);
+    }
+  }
+
+  // 期限切れキャッシュのパージ（メモリの無駄をゼロに）
+  cleanExpiredEntries() {
+    const now = Date.now();
+    for (const [k, v] of this.cache.assignments.entries()) {
+      if (v && v.time && (now - v.time > this.CACHE_TTL * 2)) {
+        this.cache.assignments.delete(k);
+      }
+    }
+    for (const [k, v] of this.cache.groupedMaterials.entries()) {
+      if (v && v.time && (now - v.time > this.MATERIALS_CACHE_TTL * 2)) {
+        this.cache.groupedMaterials.delete(k);
+      }
+    }
+    for (const [k, v] of this.cache.resolvedUrls.entries()) {
+      if (v && v.time && (now - v.time > 30 * 60 * 1000)) {
+        this.cache.resolvedUrls.delete(k);
+      }
+    }
+    for (const [k, v] of this.cache.modules.entries()) {
+      if (v && v.time && (now - v.time > this.CACHE_TTL * 2)) {
+        this.cache.modules.delete(k);
+      }
+    }
+    for (const [k, v] of this.cache.files.entries()) {
+      if (v && v.time && (now - v.time > this.CACHE_TTL * 2)) {
+        this.cache.files.delete(k);
+      }
+    }
   }
 
   // ディスクキャッシュの読み込み
@@ -479,7 +524,7 @@ class CanvasService {
         return new Date(a.dueAt) - new Date(b.dueAt);
       });
 
-      this.cache.assignments.set(cacheKey, { time: now, data: formatted });
+      this.setLru(this.cache.assignments, cacheKey, { time: now, data: formatted });
       this.saveDiskCacheDebounced();
       return formatted;
     } catch (err) {
@@ -582,7 +627,7 @@ class CanvasService {
       }))
     }));
 
-    this.cache.modules.set(cacheKey, { time: now, data: formatted });
+    this.setLru(this.cache.modules, cacheKey, { time: now, data: formatted });
     return formatted;
   }
 
@@ -671,7 +716,7 @@ class CanvasService {
     }
 
     const result = Array.from(fileMap.values());
-    this.cache.files.set(cacheKey, { time: now, data: result });
+    this.setLru(this.cache.files, cacheKey, { time: now, data: result });
     return result;
   }
 
@@ -803,7 +848,7 @@ class CanvasService {
       });
     }
 
-    this.cache.groupedMaterials.set(cacheKey, { time: now, data: grouped });
+    this.setLru(this.cache.groupedMaterials, cacheKey, { time: now, data: grouped });
     this.saveDiskCacheDebounced();
     return grouped;
   }
@@ -835,7 +880,7 @@ class CanvasService {
     
     const fileData = await this.fetchJson(endpoint);
     if (fileData?.url && this.cache.resolvedUrls) {
-      this.cache.resolvedUrls.set(cacheKey, { data: fileData, time: now });
+      this.setLru(this.cache.resolvedUrls, cacheKey, { data: fileData, time: now }, 100);
     }
     return fileData; // 署名付きダウンロードURLやファイル名、サイズを含むオブジェクト
   }

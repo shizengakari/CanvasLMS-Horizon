@@ -5,6 +5,8 @@
 
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, powerMonitor, powerSaveBlocker } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const { spawn } = require('child_process');
 
 // ネイティブメニューバーの無効化
 Menu.setApplicationMenu(null);
@@ -265,7 +267,154 @@ if (!gotTheLock) {
     app.exit(0);
   });
 
-  // 自動アップデート用 IPC ハンドラ
+  // アプリケーション情報取得
+  ipcMain.handle('get-app-info', () => ({
+    isPackaged: app.isPackaged,
+    version: app.getVersion()
+  }));
+
+  // asar 差分アップデート ダウンロード処理
+  ipcMain.handle('start-asar-update', async (event, { asarUrl, version }) => {
+    if (!app.isPackaged) {
+      return { success: false, message: '開発環境のためスキップします' };
+    }
+    if (!asarUrl) {
+      return { success: false, message: '更新ファイルURLが指定されていません' };
+    }
+
+    try {
+      const updateDir = path.join(app.getPath('userData'), 'update');
+      if (!fs.existsSync(updateDir)) {
+        fs.mkdirSync(updateDir, { recursive: true });
+      }
+      const tempAsarPath = path.join(updateDir, 'app.asar.download');
+      const targetAsarPath = path.join(updateDir, 'app.asar');
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update-status', {
+          type: 'available',
+          version: version || 'latest',
+          method: 'asar'
+        });
+      }
+
+      const response = await fetch(asarUrl, {
+        headers: { 'User-Agent': 'CanvasHorizon-App' }
+      });
+      if (!response.ok) {
+        throw new Error(`ダウンロードに失敗しました (HTTP ${response.status})`);
+      }
+
+      const totalBytes = parseInt(response.headers.get('content-length') || '0', 10);
+      let receivedBytes = 0;
+      const fileStream = fs.createWriteStream(tempAsarPath);
+
+      const reader = response.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        fileStream.write(Buffer.from(value));
+        receivedBytes += value.length;
+        if (totalBytes > 0 && mainWindow && !mainWindow.isDestroyed()) {
+          const percent = Math.round((receivedBytes / totalBytes) * 100);
+          mainWindow.webContents.send('update-status', {
+            type: 'progress',
+            percent,
+            method: 'asar'
+          });
+        }
+      }
+
+      await new Promise((resolve, reject) => {
+        fileStream.end((err) => (err ? reject(err) : resolve()));
+      });
+
+      if (fs.existsSync(targetAsarPath)) {
+        try { fs.unlinkSync(targetAsarPath); } catch (_) {}
+      }
+      fs.renameSync(tempAsarPath, targetAsarPath);
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update-status', {
+          type: 'downloaded',
+          version: version || 'latest',
+          method: 'asar'
+        });
+      }
+
+      return { success: true };
+    } catch (err) {
+      console.error('asar差分アップデート失敗:', err);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update-status', {
+          type: 'error',
+          error: err.message,
+          method: 'asar'
+        });
+      }
+      return { success: false, error: err.message };
+    }
+  });
+
+  // asar 差分アップデート 適用＆再起動
+  ipcMain.on('apply-asar-update', () => {
+    const updateDir = path.join(app.getPath('userData'), 'update');
+    const downloadedAsar = path.join(updateDir, 'app.asar');
+    const currentAsar = path.join(process.resourcesPath, 'app.asar');
+    const appExe = app.getPath('exe');
+
+    if (!fs.existsSync(downloadedAsar)) {
+      console.error('更新ファイルが存在しません:', downloadedAsar);
+      return;
+    }
+
+    // Windows用再起動・適用バッチスクリプト
+    const updaterBat = path.join(updateDir, 'apply-update.bat');
+    const batScript = `@echo off
+timeout /t 1 /nobreak >nul
+:retry
+move /y "${downloadedAsar}" "${currentAsar}" >nul 2>&1
+if errorlevel 1 (
+    timeout /t 1 /nobreak >nul
+    goto retry
+)
+start "" "${appExe}"
+del "%~f0" >nul 2>&1
+exit
+`;
+    try {
+      fs.writeFileSync(updaterBat, batScript, 'utf8');
+    } catch (e) {
+      console.error('バッチファイル作成失敗:', e);
+      return;
+    }
+
+    // サーバー接続の強制切断
+    if (serverInstance) {
+      try {
+        serverInstance.closeAllConnections?.();
+        serverInstance.close();
+      } catch (_) {}
+    }
+
+    // ウィンドウを破棄
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.destroy();
+    }
+
+    // スクリプト起動（バックグラウンド非同期）
+    const child = spawn('cmd.exe', ['/c', updaterBat], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    child.unref();
+
+    // プロセス即時終了
+    app.exit(0);
+  });
+
+  // 自動アップデート用 IPC ハンドラ（従来のインストーラーフォールバック用）
   ipcMain.handle('check-for-updates', async () => {
     if (!app.isPackaged) {
       return { status: 'dev-mode', message: '開発環境のためスキップします' };
@@ -280,7 +429,19 @@ if (!gotTheLock) {
   });
 
   ipcMain.on('quit-and-install', () => {
+    if (serverInstance) {
+      try {
+        serverInstance.closeAllConnections?.();
+        serverInstance.close();
+      } catch (_) {}
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.destroy();
+    }
     autoUpdater.quitAndInstall(false, true);
+    setTimeout(() => {
+      app.exit(0);
+    }, 500);
   });
 
   // 自動アップデート イベントリスナー

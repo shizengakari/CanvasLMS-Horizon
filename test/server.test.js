@@ -67,6 +67,8 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     assert.ok(data.currentVersion.startsWith('v1.0.'), `currentVersion should start with v1.0, got: ${data.currentVersion}`);
     assert.ok(data.checkedAt, 'Response should include checkedAt timestamp');
     assert.strictEqual(typeof data.hasUpdate, 'boolean');
+    assert.ok('asarUrl' in data, 'Response should include asarUrl property');
+    assert.ok('zipUrl' in data, 'Response should include zipUrl property');
   });
 
   it('should ensure battery saver CSS preserves refresh button and spinner animations', async () => {
@@ -163,5 +165,72 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     // 4. バックグラウンド時のリソース休止リスナー
     assert.ok(js.includes('visibilitychange'), 'Should listen for visibilitychange to suspend background resources');
   });
+
+  it('should ensure 24h urgency metrics, grouping headers, and blue-tinted submit button', async () => {
+    const [cssRes, jsRes] = await Promise.all([
+      fetch(`${baseUrl}/css/style.css`),
+      fetch(`${baseUrl}/js/app.js`)
+    ]);
+    const css = await cssRes.text();
+    const js = await jsRes.text();
+
+    // 1. タイムラインセクションの表記が「24時間以内」「まもなく」であること
+    assert.ok(js.includes("title: '24時間以内'"), 'Should use 24時間以内 as timeline section title');
+    assert.ok(js.includes("badge: 'まもなく'"), 'Should use まもなく as urgent timeline section badge');
+
+    // 2. 課題カードの提出ボタンに action-submit クラスが指定されていること
+    assert.ok(js.includes('btn-submit-action action-chip-btn action-submit'), 'Submit button should use action-submit class');
+
+    // 3. 提出ボタンのスタイルが科目タブのような青っぽい色（#8ab4f8）で定義されていること
+    assert.ok(css.includes('.btn-submit-action'), 'Submit button style should be defined');
+    assert.ok(css.includes('#8ab4f8'), 'CSS should include Google blue accent color');
+    assert.ok(css.includes('rgba(138, 180, 248,'), 'CSS should include blue tint for submit button');
+
+    // 4. 24時間以内の課題判定が diffHours <= 24 で行われていること
+    assert.ok(js.includes('diffHours <= 24'), 'Should include urgent assignments correctly within 24 hours');
+  });
+
+  it('should ensure announcement PDF links and attachments open seamlessly in built-in PDF viewer', async () => {
+    const jsRes = await fetch(`${baseUrl}/js/app.js`);
+    const js = await jsRes.text();
+
+    // 1. setupContentLinks が定義され、PDFリンクが内蔵エディタにバインドされること
+    assert.ok(js.includes('function setupContentLinks'), 'Should define setupContentLinks');
+    assert.ok(js.includes('openPdfPreviewModal'), 'Should call openPdfPreviewModal for inline PDF links');
+
+    // 2. お知らせレンダリングで setupContentLinks と添付ファイル処理が行われること
+    assert.ok(js.includes('setupContentLinks(bodyEl, courseId)'), 'Should bind links in announcement body');
+    assert.ok(js.includes('announcement-attachments'), 'Should support announcement attachments');
+  });
+
+  it('should ensure high-efficiency optimizations: debouncing, DocumentFragment batching, LRU cache and CSS containment', async () => {
+    const [cssRes, jsRes] = await Promise.all([
+      fetch(`${baseUrl}/css/style.css`),
+      fetch(`${baseUrl}/js/app.js`)
+    ]);
+    const css = await cssRes.text();
+    const js = await jsRes.text();
+
+    // 1. デバウンスによる入力スパイク防止
+    assert.ok(js.includes('function debounce('), 'Should define debounce function');
+    assert.ok(js.includes('debouncedRenderAssignments'), 'Dashboard search should be debounced');
+    assert.ok(js.includes('debouncedFilter'), 'Materials search should be debounced');
+    assert.ok(js.includes('debouncedRenderPalette'), 'Command palette search should be debounced');
+
+    // 2. DocumentFragment による一括描画とリフロー最小化
+    assert.ok(js.includes('document.createDocumentFragment()'), 'Should use DocumentFragment for batched DOM updates');
+
+    // 3. インメモリキャッシュの LRU メモリ管理
+    assert.ok(js.includes('MAX_MATERIALS_IN_MEMORY'), 'Should cap materials cache to prevent memory bloat');
+
+    // 4. CSS Containment & content-visibility
+    assert.ok(css.includes('content-visibility: auto;'), 'Should use content-visibility: auto for smooth scrolling');
+    assert.ok(css.includes('contain: content;'), 'Should use contain: content on card elements');
+
+    // 5. アニメーション終了時のキャンバスVRAM解放
+    assert.ok(js.includes('canvas.width = 0;'), 'Should zero canvas size to release GPU VRAM on finish');
+  });
 });
+
+
 

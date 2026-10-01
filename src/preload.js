@@ -24,6 +24,13 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   // アプリの再起動
   relaunch: () => ipcRenderer.send('app-relaunch'),
 
+  // アプリケーション情報取得
+  getAppInfo: () => ipcRenderer.invoke('get-app-info'),
+
+  // asar 差分アップデート
+  startAsarUpdate: (options) => ipcRenderer.invoke('start-asar-update', options),
+  applyAsarUpdate: () => ipcRenderer.send('apply-asar-update'),
+
   // 自動アップデート確認
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
 

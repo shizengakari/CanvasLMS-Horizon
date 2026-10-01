@@ -40,6 +40,9 @@ jobs:
       - name: Windows アプリのビルド
         run: npx electron-builder --win --publish never
 
+      - name: ポータブルZIPの作成
+        run: powershell -NoProfile -Command "Compress-Archive -Path 'dist\win-unpacked\*' -DestinationPath 'dist\Canvas-Horizon-Windows-x64-Portable.zip' -Force"
+
       - name: GitHub Releases へ一括完全公開
         uses: softprops/action-gh-release@v2
         with:
@@ -48,7 +51,9 @@ jobs:
           files: |
             dist/Canvas-Horizon-Setup-*.exe
             dist/Canvas-Horizon-Setup-*.exe.blockmap
+            dist/Canvas-Horizon-Windows-x64-Portable.zip
             dist/latest.yml
+            dist/win-unpacked/resources/app.asar
           draft: false
           prerelease: false
           generate_release_notes: true

@@ -34,6 +34,24 @@ function publicDownloadJob(job) {
   return details;
 }
 
+function registerDownloadJob(job) {
+  // 完了・失敗済みの古いジョブが上限を超えた場合は古い順に自動破棄（メモリリーク防止）
+  const MAX_FINISHED_JOBS = 30;
+  const finishedKeys = [];
+  for (const [id, j] of downloadJobs.entries()) {
+    if (j.status !== 'downloading') {
+      finishedKeys.push(id);
+    }
+  }
+  if (finishedKeys.length > MAX_FINISHED_JOBS) {
+    const toRemove = finishedKeys.slice(0, finishedKeys.length - MAX_FINISHED_JOBS);
+    for (const id of toRemove) {
+      downloadJobs.delete(id);
+    }
+  }
+  downloadJobs.set(job.id, job);
+}
+
 function getCanvasHost(cfg) {
   if (!cfg?.baseUrl) return '';
   try {
@@ -243,17 +261,66 @@ app.post('/api/courses/:courseId/assignments/:assignmentId/submit-text', async (
 const PDF_CACHE_DIR = path.join(os.tmpdir(), 'canvas_horizon_pdf_cache');
 try { fs.mkdirSync(PDF_CACHE_DIR, { recursive: true }); } catch (e) {}
 
+// 古いPDFキャッシュの自動クリーンアップ（ディスク容量とメモリの肥大化防止）
+function cleanOldPdfCaches() {
+  try {
+    if (!fs.existsSync(PDF_CACHE_DIR)) return;
+    const files = fs.readdirSync(PDF_CACHE_DIR);
+    const now = Date.now();
+    const maxAge = 48 * 60 * 60 * 1000; // 48時間
+    let totalSize = 0;
+    const fileStats = [];
+
+    for (const f of files) {
+      const fullPath = path.join(PDF_CACHE_DIR, f);
+      try {
+        const stat = fs.statSync(fullPath);
+        totalSize += stat.size;
+        fileStats.push({ path: fullPath, size: stat.size, mtime: stat.mtimeMs });
+      } catch (_) {}
+    }
+
+    // 48時間経過したファイル、または合計300MBを超過した場合は古い順に削除
+    fileStats.sort((a, b) => a.mtime - b.mtime);
+    for (const item of fileStats) {
+      if ((now - item.mtime > maxAge) || totalSize > 300 * 1024 * 1024) {
+        try {
+          fs.unlinkSync(item.path);
+          totalSize -= item.size;
+        } catch (_) {}
+      }
+    }
+  } catch (err) {
+    console.warn('PDF cache cleanup warning:', err.message);
+  }
+}
+cleanOldPdfCaches();
+const pdfCleanTimer = setInterval(cleanOldPdfCaches, 6 * 60 * 60 * 1000);
+if (pdfCleanTimer.unref) pdfCleanTimer.unref();
+
 // 10. ファイルダウンロードプロキシ（PDFインライン表示 / 直接ストリーミング）
 app.get('/api/files/download', async (req, res) => {
   try {
-    const { url, id, name, inline } = req.query;
-    let targetUrl = url;
+    const { url, id, name, inline, courseId } = req.query;
+    let targetUrl = url ? String(url).trim() : null;
 
     const encodedName = encodeURIComponent(name || 'document.pdf');
     const dispositionType = inline === 'true' ? 'inline' : 'attachment';
-    const cachedFilePath = id ? path.join(PDF_CACHE_DIR, `${id}.pdf`) : null;
 
-    // 1. キャッシュが存在する場合はローカルファイルを返却
+    // 0. fileId および courseId の抽出（未指定の場合、URL文字列から自動抽出）
+    let fileId = id ? String(id).trim() : null;
+    let targetCourseId = courseId ? String(courseId).trim() : null;
+
+    if (!fileId && targetUrl) {
+      const fMatch = targetUrl.match(/\/files\/(\d+)/);
+      if (fMatch) fileId = fMatch[1];
+      const cMatch = targetUrl.match(/\/courses\/(\d+)/);
+      if (cMatch && !targetCourseId) targetCourseId = cMatch[1];
+    }
+
+    const cachedFilePath = fileId ? path.join(PDF_CACHE_DIR, `${fileId}.pdf`) : null;
+
+    // 1. キャッシュが存在する場合はローカルファイルを即座に返却（高速化）
     if (cachedFilePath && fs.existsSync(cachedFilePath)) {
       try {
         const stats = fs.statSync(cachedFilePath);
@@ -266,16 +333,45 @@ app.get('/api/files/download', async (req, res) => {
       } catch (cacheErr) {}
     }
 
-    if (!targetUrl && id) {
-      const fileData = await canvasService.resolveFileDownload(id);
-      targetUrl = fileData?.url;
+    const cfg = loadConfig();
+
+    // 2. fileId がある場合は Canvas Files API から署名付きダウンロードURLを最優先で解決
+    if (fileId) {
+      try {
+        const fileData = await canvasService.resolveFileDownload(fileId, targetCourseId);
+        if (fileData?.url) {
+          targetUrl = fileData.url;
+        }
+      } catch (resolveErr) {
+        console.warn(`Could not resolve fileId ${fileId} via Canvas API, falling back to direct URL:`, resolveErr.message);
+      }
+    }
+
+    // 3. targetUrl が相対パスの場合、Canvas baseUrl で絶対URLに補完
+    if (targetUrl && targetUrl.startsWith('/')) {
+      try {
+        targetUrl = new URL(targetUrl, cfg.baseUrl).toString();
+      } catch (e) {}
+    }
+
+    // 4. Canvas Web画面のプレビュー用ラッパー (wrap=1) を除去し直接ダウンロード指定を付与
+    if (targetUrl) {
+      try {
+        const parsed = new URL(targetUrl);
+        if (parsed.searchParams.has('wrap')) {
+          parsed.searchParams.delete('wrap');
+        }
+        if (parsed.pathname.includes('/files/') && !parsed.searchParams.has('download') && !parsed.searchParams.has('download_frd')) {
+          parsed.searchParams.set('download_frd', '1');
+        }
+        targetUrl = parsed.toString();
+      } catch (e) {}
     }
 
     if (!targetUrl) {
       return res.status(400).send('Download URL or File ID required');
     }
 
-    const cfg = loadConfig();
     const canvasHost = getCanvasHost(cfg);
     let urlHost = '';
     try { urlHost = new URL(targetUrl).host; } catch (e) {}
@@ -312,7 +408,12 @@ app.get('/api/files/download', async (req, res) => {
       return res.status(fileRes.status).send(`Failed to fetch file: ${fileRes.statusText}`);
     }
 
-    const contentType = fileRes.headers.get('content-type') || 'application/pdf';
+    let contentType = fileRes.headers.get('content-type') || 'application/pdf';
+    // PDF 要求であること、またはファイル名が PDF であれば content-type を application/pdf に補正
+    if ((name && name.toLowerCase().endsWith('.pdf')) || targetUrl.toLowerCase().includes('.pdf') || contentType.includes('application/octet-stream')) {
+      contentType = 'application/pdf';
+    }
+
     const contentLength = fileRes.headers.get('content-length');
     const contentRange = fileRes.headers.get('content-range');
     const acceptRanges = fileRes.headers.get('accept-ranges') || 'bytes';
@@ -370,7 +471,7 @@ app.post('/api/files/download-single', async (req, res) => {
       error: null
     };
 
-    downloadJobs.set(job.id, job);
+    registerDownloadJob(job);
 
     (async () => {
       const cfg = loadConfig();
@@ -517,7 +618,7 @@ app.post('/api/files/download-batch', async (req, res) => {
       error: null
     };
 
-    downloadJobs.set(job.id, job);
+    registerDownloadJob(job);
 
     // バックグラウンドで順次ダウンロード
     (async () => {
@@ -781,7 +882,7 @@ app.post('/api/youtube/download', (req, res, next) => {
   try {
     const child = spawn(ytdlCmd, args);
     job.process = child;
-    downloadJobs.set(job.id, job);
+    registerDownloadJob(job);
     const updateProgress = (data) => {
       const output = data.toString();
       const match = output.match(/\[download\]\s+(\d+(?:\.\d+)?)%/);
@@ -951,15 +1052,20 @@ app.get('/api/app/check-update', async (req, res) => {
 
       if (resp.ok) {
         const release = await resp.json();
-        const latestTag = release.tag_name || release.name;
-        const hasUpdate = Boolean(latestTag && compareSemver(latestTag, currentVersion) > 0);
+        const asarAsset = release.assets?.find(a => a.name === 'app.asar');
+        const setupAsset = release.assets?.find(a => a.name && a.name.endsWith('.exe'));
+        const zipAsset = release.assets?.find(a => a.name && a.name.endsWith('.zip'));
+
         return res.json({
           success: true,
           currentVersion,
           latestVersion: latestTag || currentVersion,
           hasUpdate,
           releaseNotes: release.body || '',
-          downloadUrl: release.assets?.[0]?.browser_download_url || release.html_url,
+          downloadUrl: setupAsset?.browser_download_url || release.html_url,
+          zipUrl: zipAsset?.browser_download_url || null,
+          asarUrl: asarAsset?.browser_download_url || null,
+          asarSize: asarAsset?.size || null,
           publishedAt: release.published_at,
           checkedAt
         });
@@ -970,6 +1076,8 @@ app.get('/api/app/check-update', async (req, res) => {
           currentVersion,
           latestVersion: currentVersion,
           hasUpdate: false,
+          asarUrl: null,
+          zipUrl: null,
           error: errText,
           checkedAt
         });
@@ -982,6 +1090,8 @@ app.get('/api/app/check-update', async (req, res) => {
         currentVersion,
         latestVersion: currentVersion,
         hasUpdate: false,
+        asarUrl: null,
+        zipUrl: null,
         error: isTimeout ? '接続がタイムアウトしました' : 'ネットワークに接続できませんでした',
         checkedAt
       });
@@ -994,6 +1104,8 @@ app.get('/api/app/check-update', async (req, res) => {
       currentVersion: fallbackVer,
       latestVersion: fallbackVer,
       hasUpdate: false,
+      asarUrl: null,
+      zipUrl: null,
       error: err.message,
       checkedAt
     });
