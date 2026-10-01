@@ -1333,43 +1333,120 @@ async function initApp() {
     if (welcomeBanner) welcomeBanner.style.display = 'flex';
   });
 
-  // 自動アップデートリスナーの登録（Electron ネイティブ）
+  // 自動アップデートリスナーの登録（Electron ネイティブ・electron-updater）
   if (window.desktopAPI && typeof window.desktopAPI.onUpdateStatus === 'function') {
     const banner = document.getElementById('header-update-banner');
     const bannerText = document.getElementById('header-update-text');
     const restartBtn = document.getElementById('btn-header-update-restart');
 
     window.desktopAPI.onUpdateStatus((status) => {
-      if (!banner || !bannerText || !restartBtn) return;
       if (status.type === 'available') {
-        bannerText.textContent = `新バージョン (${status.version}) を準備中...`;
-        restartBtn.textContent = 'ダウンロード中';
-        restartBtn.disabled = true;
-        banner.style.display = 'flex';
+        if (banner && bannerText && restartBtn) {
+          bannerText.textContent = `新バージョン (${status.version || '最新'}) 利用可能`;
+          restartBtn.textContent = '詳細 / 更新';
+          restartBtn.disabled = false;
+          banner.style.display = 'flex';
+          banner.style.cursor = 'pointer';
+          banner.onclick = () => {
+            if (currentUpdateData) showUpdateModal(currentUpdateData);
+            else checkAppUpdates(true);
+          };
+          restartBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (currentUpdateData) showUpdateModal(currentUpdateData);
+            else checkAppUpdates(true);
+          };
+        }
       } else if (status.type === 'progress') {
-        bannerText.textContent = '新バージョンをダウンロード中...';
-        restartBtn.textContent = `${status.percent}%`;
-        restartBtn.disabled = true;
-        banner.style.display = 'flex';
-      } else if (status.type === 'downloaded') {
-        bannerText.textContent = `新バージョン (${status.version}) の準備が完了しました`;
-        restartBtn.textContent = '更新して再起動';
-        restartBtn.disabled = false;
-        banner.style.display = 'flex';
-        restartBtn.onclick = () => {
+        isUpdateDownloading = true;
+        if (banner && bannerText && restartBtn) {
+          bannerText.textContent = `更新ダウンロード中... ${status.percent}%`;
+          restartBtn.textContent = `${status.percent}%`;
           restartBtn.disabled = true;
-          restartBtn.textContent = '更新適用中...';
-          if (status.method === 'asar' && typeof window.desktopAPI.applyAsarUpdate === 'function') {
-            window.desktopAPI.applyAsarUpdate();
-          } else if (typeof window.desktopAPI.quitAndInstall === 'function') {
+          banner.style.display = 'flex';
+        }
+
+        // モーダル内の進捗を滑らかに更新
+        const progressWrap = document.getElementById('update-modal-progress-wrap');
+        const progressFill = document.getElementById('update-progress-bar-fill');
+        const progressPercent = document.getElementById('update-progress-percent');
+        const progressDetail = document.getElementById('update-progress-detail');
+        const progressStatus = document.getElementById('update-progress-status');
+        const actionBtn = document.getElementById('btn-update-action');
+
+        if (progressWrap) progressWrap.style.display = 'flex';
+        if (progressFill) progressFill.style.width = `${status.percent}%`;
+        if (progressPercent) progressPercent.textContent = `${status.percent}%`;
+        if (progressStatus) progressStatus.textContent = '新バージョンをダウンロード中...';
+        if (actionBtn) {
+          actionBtn.disabled = true;
+          actionBtn.textContent = 'ダウンロード中...';
+        }
+        if (progressDetail && status.transferred && status.total) {
+          const curMb = (status.transferred / 1048576).toFixed(1);
+          const totalMb = (status.total / 1048576).toFixed(1);
+          const speedMb = status.bytesPerSecond ? `(${(status.bytesPerSecond / 1048576).toFixed(1)} MB/s)` : '';
+          progressDetail.textContent = `${curMb} MB / ${totalMb} MB ${speedMb}`.trim();
+        }
+      } else if (status.type === 'downloaded') {
+        isUpdateDownloading = false;
+        isUpdateDownloaded = true;
+        if (banner && bannerText && restartBtn) {
+          bannerText.textContent = `新バージョン (${status.version || '最新'}) の準備完了`;
+          restartBtn.textContent = '今すぐ再起動';
+          restartBtn.disabled = false;
+          banner.style.display = 'flex';
+          restartBtn.onclick = (e) => {
+            e.stopPropagation();
+            restartBtn.disabled = true;
+            restartBtn.textContent = '再起動中...';
             window.desktopAPI.quitAndInstall();
-          }
-        };
+          };
+        }
+
+        const progressWrap = document.getElementById('update-modal-progress-wrap');
+        const progressStatus = document.getElementById('update-progress-status');
+        const progressFill = document.getElementById('update-progress-bar-fill');
+        const progressPercent = document.getElementById('update-progress-percent');
+        const actionBtn = document.getElementById('btn-update-action');
+
+        if (progressWrap) progressWrap.style.display = 'flex';
+        if (progressStatus) progressStatus.textContent = 'ダウンロード完了。今すぐ更新できます。';
+        if (progressFill) progressFill.style.width = '100%';
+        if (progressPercent) progressPercent.textContent = '100%';
+        if (actionBtn) {
+          actionBtn.disabled = false;
+          actionBtn.textContent = '今すぐ再起動して更新';
+          actionBtn.onclick = () => {
+            actionBtn.disabled = true;
+            actionBtn.textContent = '再起動中...';
+            window.desktopAPI.quitAndInstall();
+          };
+        }
+        showToast('アップデートの準備が完了しました。再起動して適用できます。', 'success');
       } else if (status.type === 'error') {
-        bannerText.textContent = `更新ダウンロード失敗: ${status.error || 'エラー'}`;
-        restartBtn.textContent = '詳細を確認';
-        restartBtn.disabled = false;
-        restartBtn.onclick = () => checkAppUpdates(true);
+        isUpdateDownloading = false;
+        if (banner && bannerText && restartBtn) {
+          bannerText.textContent = '更新ダウンロードで問題が発生しました';
+          restartBtn.textContent = '詳細確認';
+          restartBtn.disabled = false;
+          restartBtn.onclick = () => {
+            if (currentUpdateData) showUpdateModal(currentUpdateData);
+            else checkAppUpdates(true);
+          };
+        }
+        const progressStatus = document.getElementById('update-progress-status');
+        if (progressStatus) {
+          progressStatus.textContent = '自動更新で問題が発生しました。「手動ダウンロード」をお試しください。';
+        }
+        const actionBtn = document.getElementById('btn-update-action');
+        if (actionBtn && currentUpdateData) {
+          actionBtn.disabled = false;
+          actionBtn.textContent = 'ブラウザでダウンロード';
+          actionBtn.onclick = () => {
+            utils.openExternalUrl(currentUpdateData.downloadUrl || 'https://github.com/shizengakari/CanvasLMS-Horizon/releases');
+          };
+        }
       }
     });
   }
@@ -2272,6 +2349,20 @@ function setupModalEvents() {
   document.getElementById('assignment-modal').addEventListener('click', (e) => {
     if (e.target.id === 'assignment-modal') closeAssignmentModal();
   });
+
+  // アップデートモーダルのイベント登録
+  const updateCloseBtn = document.getElementById('update-modal-close-btn');
+  if (updateCloseBtn) updateCloseBtn.addEventListener('click', closeUpdateModal);
+
+  const updateDismissBtn = document.getElementById('btn-update-dismiss');
+  if (updateDismissBtn) updateDismissBtn.addEventListener('click', closeUpdateModal);
+
+  const updateOverlay = document.getElementById('update-modal');
+  if (updateOverlay) {
+    updateOverlay.addEventListener('click', (e) => {
+      if (e.target.id === 'update-modal') closeUpdateModal();
+    });
+  }
 
   // 提出形式タブの切り替え
   document.querySelectorAll('.sub-tab-btn').forEach(btn => {
@@ -3509,6 +3600,12 @@ window.addEventListener('keydown', (e) => {
       }
       return;
     }
+
+    const updateModal = document.getElementById('update-modal');
+    if (updateModal && updateModal.style.display !== 'none') {
+      closeUpdateModal();
+      return;
+    }
   }
 });
 
@@ -3789,6 +3886,114 @@ function setupSettingsEvents() {
   }
 }
 
+// ==========================================================================
+// アプリアップデート制御ロジック (electron-updater + Update Modal)
+// ==========================================================================
+let currentUpdateData = null;
+let isUpdateDownloading = false;
+let isUpdateDownloaded = false;
+
+function closeUpdateModal() {
+  const modal = document.getElementById('update-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function showUpdateModal(updateData) {
+  if (!updateData) return;
+  currentUpdateData = updateData;
+  const modal = document.getElementById('update-modal');
+  if (!modal) return;
+
+  const curVerEl = document.getElementById('update-modal-current-ver');
+  if (curVerEl) curVerEl.textContent = updateData.currentVersion || 'v1.0.10';
+
+  const latestVerEl = document.getElementById('update-modal-latest-ver');
+  if (latestVerEl) latestVerEl.textContent = updateData.latestVersion || 'v1.0.11';
+
+  const dateEl = document.getElementById('update-modal-date');
+  if (dateEl) {
+    if (updateData.publishedAt) {
+      try {
+        const d = new Date(updateData.publishedAt);
+        dateEl.textContent = `(${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} 公開)`;
+      } catch (_) {
+        dateEl.textContent = '';
+      }
+    } else {
+      dateEl.textContent = '';
+    }
+  }
+
+  const notesEl = document.getElementById('update-modal-notes');
+  if (notesEl) {
+    if (updateData.releaseNotes && updateData.releaseNotes.trim()) {
+      notesEl.textContent = updateData.releaseNotes.trim();
+    } else {
+      notesEl.textContent = `バージョン ${updateData.latestVersion} が利用可能です。\nセキュリティの強化、更新プロセスの信頼性向上、および動作の安定性改善が含まれています。`;
+    }
+  }
+
+  const manualLink = document.getElementById('update-manual-link');
+  if (manualLink) {
+    manualLink.onclick = (e) => {
+      e.preventDefault();
+      const url = updateData.downloadUrl || updateData.zipUrl || 'https://github.com/shizengakari/CanvasLMS-Horizon/releases';
+      utils.openExternalUrl(url);
+    };
+  }
+
+  const actionBtn = document.getElementById('btn-update-action');
+  const progressWrap = document.getElementById('update-modal-progress-wrap');
+
+  if (isUpdateDownloaded) {
+    if (progressWrap) progressWrap.style.display = 'none';
+    if (actionBtn) {
+      actionBtn.textContent = '今すぐ再起動して更新';
+      actionBtn.disabled = false;
+      actionBtn.onclick = () => {
+        actionBtn.disabled = true;
+        actionBtn.textContent = '再起動中...';
+        if (window.desktopAPI && typeof window.desktopAPI.quitAndInstall === 'function') {
+          window.desktopAPI.quitAndInstall();
+        }
+      };
+    }
+  } else if (isUpdateDownloading) {
+    if (progressWrap) progressWrap.style.display = 'flex';
+    if (actionBtn) {
+      actionBtn.textContent = 'ダウンロード中...';
+      actionBtn.disabled = true;
+    }
+  } else {
+    if (progressWrap) progressWrap.style.display = 'none';
+    if (actionBtn) {
+      actionBtn.textContent = '今すぐアップデート';
+      actionBtn.disabled = false;
+      actionBtn.onclick = async () => {
+        if (window.desktopAPI && typeof window.desktopAPI.startDownloadUpdate === 'function') {
+          isUpdateDownloading = true;
+          actionBtn.disabled = true;
+          actionBtn.textContent = 'ダウンロード中...';
+          if (progressWrap) progressWrap.style.display = 'flex';
+          const res = await window.desktopAPI.startDownloadUpdate();
+          if (!res || !res.success) {
+            isUpdateDownloading = false;
+            actionBtn.disabled = false;
+            actionBtn.textContent = 'ブラウザでダウンロード';
+            actionBtn.onclick = () => {
+              utils.openExternalUrl(updateData.downloadUrl || 'https://github.com/shizengakari/CanvasLMS-Horizon/releases');
+            };
+          }
+        } else {
+          utils.openExternalUrl(updateData.downloadUrl || 'https://github.com/shizengakari/CanvasLMS-Horizon/releases');
+        }
+      };
+    }
+  }
+
+  modal.style.display = 'flex';
+}
+
 // アプリ全体の自動アップデート確認関数
 async function checkAppUpdates(isManual = false) {
   const banner = document.getElementById('header-update-banner');
@@ -3817,118 +4022,86 @@ async function checkAppUpdates(isManual = false) {
     }
 
     if (res && res.hasUpdate) {
-      // 開発環境時のハンドリング
-      if (appInfo && !appInfo.isPackaged) {
-        if (banner && bannerText && restartBtn) {
-          bannerText.textContent = `新バージョン (${res.latestVersion}) が利用可能です（開発環境のため自動更新はスキップされます）`;
-          restartBtn.textContent = 'Releasesを開く';
-          restartBtn.disabled = false;
-          restartBtn.onclick = () => {
-            utils.openExternalUrl(res.downloadUrl || 'https://github.com/shizengakari/CanvasLMS-Horizon/releases');
-          };
-          banner.style.display = 'flex';
-        }
-        if (updateDesc) {
-          updateDesc.innerHTML = `<span style="color: var(--accent-primary); font-weight: 600;">新バージョン (${res.latestVersion}) が利用可能です（開発環境）</span>`;
-        }
-        if (checkUpdateBtn) {
-          checkUpdateBtn.textContent = 'Releasesを開く';
-          checkUpdateBtn.classList.remove('btn-secondary');
-          checkUpdateBtn.classList.add('btn-primary');
-          checkUpdateBtn.disabled = false;
-          checkUpdateBtn.onclick = () => {
-            utils.openExternalUrl(res.downloadUrl || 'https://github.com/shizengakari/CanvasLMS-Horizon/releases');
-          };
-        }
-        if (isManual) {
-          showToast(`新バージョン ${res.latestVersion} が利用可能です（開発環境のためスキップ）`, 'info');
-        }
-        return;
-      }
+      currentUpdateData = res;
 
-      // 本番パッケージ環境：asar 差分更新を最優先で開始
-      if (window.desktopAPI) {
-        if (res.asarUrl && typeof window.desktopAPI.startAsarUpdate === 'function') {
-          // asar 差分アップデートをバックグラウンド開始
-          window.desktopAPI.startAsarUpdate({ asarUrl: res.asarUrl, version: res.latestVersion }).catch(() => {});
-        } else if (typeof window.desktopAPI.checkForUpdates === 'function') {
-          // asarAsset が見つからない場合は従来の autoUpdater をフォールバック利用
-          window.desktopAPI.checkForUpdates().catch(() => {});
-        }
-      }
-
+      // ヘッダーバナー表示
       if (banner && bannerText && restartBtn) {
-        if (!restartBtn.textContent.includes('再起動') && !restartBtn.textContent.includes('%')) {
-          bannerText.textContent = `新バージョン (${res.latestVersion}) を準備中...`;
+        if (!isUpdateDownloading && !isUpdateDownloaded) {
+          bannerText.textContent = `新バージョン (${res.latestVersion}) 利用可能`;
+          restartBtn.textContent = '詳細 / 更新';
+          restartBtn.disabled = false;
           banner.style.display = 'flex';
-          if (!window.desktopAPI) {
-            restartBtn.textContent = 'ダウンロード';
-            restartBtn.disabled = false;
-            restartBtn.onclick = () => {
-              utils.openExternalUrl(res.downloadUrl || 'https://github.com/shizengakari/CanvasLMS-Horizon/releases');
-            };
-          }
+          banner.style.cursor = 'pointer';
+          banner.onclick = () => showUpdateModal(res);
+          restartBtn.onclick = (e) => {
+            e.stopPropagation();
+            showUpdateModal(res);
+          };
         }
       }
+
+      // 設定画面の更新説明
       if (updateDesc) {
         updateDesc.innerHTML = `<span style="color: var(--accent-primary); font-weight: 600;">新バージョン (${res.latestVersion}) が利用可能です</span>`;
       }
       if (checkUpdateBtn) {
-        checkUpdateBtn.textContent = '更新をダウンロード';
+        checkUpdateBtn.textContent = 'アップデートを確認';
         checkUpdateBtn.classList.remove('btn-secondary');
         checkUpdateBtn.classList.add('btn-primary');
         checkUpdateBtn.disabled = false;
-        checkUpdateBtn.onclick = () => {
-          if (window.desktopAPI && res.asarUrl && typeof window.desktopAPI.startAsarUpdate === 'function') {
-            checkUpdateBtn.disabled = true;
-            checkUpdateBtn.textContent = 'ダウンロード中...';
-            window.desktopAPI.startAsarUpdate({ asarUrl: res.asarUrl, version: res.latestVersion }).then(() => {
-              checkUpdateBtn.textContent = '更新可能';
-            });
-          } else {
-            utils.openExternalUrl(res.downloadUrl || 'https://github.com/shizengakari/CanvasLMS-Horizon/releases');
-          }
-        };
+        checkUpdateBtn.onclick = () => showUpdateModal(res);
       }
+
+      // 手動で更新確認を押した場合モーダルを即座に開く
       if (isManual) {
-        showToast(`新バージョン ${res.latestVersion} が利用可能です`, 'info');
+        showUpdateModal(res);
+      } else {
+        // 自動確認時は控えめにトースト
+        showToast(`新バージョン ${res.latestVersion} が利用可能です。上部バーまたは設定から更新できます。`, 'info');
+      }
+
+      // Electronネイティブの autoUpdater バックグラウンド確認
+      if (window.desktopAPI && appInfo && appInfo.isPackaged && typeof window.desktopAPI.checkForUpdates === 'function') {
+        window.desktopAPI.checkForUpdates().catch(() => {});
       }
     } else if (res && res.success) {
       if (updateDesc) {
         updateDesc.textContent = '最新バージョンです';
       }
-      if (isManual) {
-        showToast(`お使いのバージョンは最新です (${res.currentVersion})`, 'success');
-        if (checkUpdateBtn) {
-          checkUpdateBtn.textContent = '最新です';
+      if (checkUpdateBtn) {
+        checkUpdateBtn.disabled = false;
+        checkUpdateBtn.textContent = isManual ? '最新です' : '更新を確認';
+        if (isManual) {
           setTimeout(() => {
-            checkUpdateBtn.disabled = false;
             checkUpdateBtn.textContent = '更新を確認';
           }, 2500);
         }
+      }
+      if (isManual) {
+        showToast(`お使いのバージョンは最新です (${res.currentVersion})`, 'success');
       }
     } else {
       if (updateDesc) {
         updateDesc.innerHTML = `<span style="color: #ef4444; font-weight: 500;">更新の確認に失敗しました</span>`;
       }
+      if (checkUpdateBtn) {
+        checkUpdateBtn.disabled = false;
+        checkUpdateBtn.textContent = '再試行';
+      }
       if (isManual) {
-        showToast('更新の確認に失敗しました', 'warning');
-        if (checkUpdateBtn) {
-          checkUpdateBtn.disabled = false;
-          checkUpdateBtn.textContent = '再試行';
-        }
+        showToast('更新の確認に失敗しました。ネットワークをご確認ください。', 'warning');
       }
     }
   } catch (err) {
     if (updateDesc) {
       updateDesc.innerHTML = `<span style="color: #ef4444; font-weight: 500;">更新の確認に失敗しました</span>`;
     }
+    if (checkUpdateBtn) {
+      checkUpdateBtn.disabled = false;
+      checkUpdateBtn.textContent = '更新を確認';
+    }
     if (isManual) {
       showToast('アップデート確認中にエラーが発生しました', 'error');
-      if (checkUpdateBtn) {
-        checkUpdateBtn.disabled = false;
-        checkUpdateBtn.textContent = '更新を確認';
-      }
     }
   }
 }

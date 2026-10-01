@@ -18,7 +18,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+JP:wght@400;500;700&family=Plus+Jakarta+Sans:wght@500;600;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=1.1.0">
+  <link rel="stylesheet" href="css/style.css?v=1.0.11">
 </head>
 <body>
   <canvas id="confetti-canvas"></canvas>
@@ -368,7 +368,7 @@
               <label class="setting-label">バージョン情報</label>
               <div class="setting-update-card" id="setting-update-card">
                 <div class="update-card-left">
-                  <div class="update-app-title">バージョン <span class="update-version-tag" id="app-current-version">v1.1.0</span></div>
+                  <div class="update-app-title">バージョン <span class="update-version-tag" id="app-current-version">v1.0.11</span></div>
                   <div class="update-app-desc" id="update-status-desc">最新バージョンです</div>
                 </div>
                 <div class="update-card-right">
@@ -718,10 +718,66 @@
     </div>
   </div>
 
+  <!-- アプリアップデート通知ダイアログ -->
+  <div class="modal-overlay" id="update-modal" style="display: none;">
+    <div class="modal-container update-modal-container" id="update-modal-container">
+      <div class="modal-header update-modal-header">
+        <div class="update-modal-title-group">
+          <div class="update-icon-circle">
+            <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          </div>
+          <div>
+            <h3 class="update-modal-heading" id="update-modal-title">アップデートが利用可能です</h3>
+            <div class="update-modal-version-row">
+              <span class="update-ver-badge current" id="update-modal-current-ver">v1.0.9</span>
+              <svg class="update-arrow-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+              <span class="update-ver-badge latest" id="update-modal-latest-ver">v1.0.11</span>
+              <span class="update-date-text" id="update-modal-date"></span>
+            </div>
+          </div>
+        </div>
+        <button class="icon-btn" id="update-modal-close-btn" title="閉じる (Esc)">
+          <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <div class="modal-body update-modal-body">
+        <div class="update-notes-section">
+          <div class="update-section-label">更新内容</div>
+          <div class="update-notes-card" id="update-modal-notes">
+            新機能の追加とパフォーマンス・セキュリティの改善が行われました。
+          </div>
+        </div>
+
+        <!-- ダウンロード進捗プログレスバー -->
+        <div class="update-progress-wrap" id="update-modal-progress-wrap" style="display: none;">
+          <div class="update-progress-info">
+            <span class="update-progress-status" id="update-progress-status">ダウンロード中...</span>
+            <span class="update-progress-percent" id="update-progress-percent">0%</span>
+          </div>
+          <div class="update-progress-bar-bg">
+            <div class="update-progress-bar-fill" id="update-progress-bar-fill" style="width: 0%;"></div>
+          </div>
+          <div class="update-progress-detail" id="update-progress-detail"></div>
+        </div>
+      </div>
+
+      <div class="modal-footer update-modal-footer">
+        <div class="update-footer-left">
+          <a class="update-manual-link" id="update-manual-link" href="#" target="_blank" rel="noopener noreferrer">手動ダウンロード</a>
+        </div>
+        <div class="update-footer-right">
+          <button type="button" class="btn-secondary" id="btn-update-dismiss">あとで</button>
+          <button type="button" class="btn-primary" id="btn-update-action">今すぐアップデート</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- トースト通知コンテナ -->
   <div class="toast-container" id="toast-container"></div>
 
   <!-- アプリケーションロジック -->
-  <script src="js/app.js?v=1.1.0"></script>
+  <script src="js/app.js?v=1.0.11"></script>
 </body>
 </html>

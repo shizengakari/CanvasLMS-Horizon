@@ -1052,7 +1052,8 @@ app.get('/api/app/check-update', async (req, res) => {
 
       if (resp.ok) {
         const release = await resp.json();
-        const asarAsset = release.assets?.find(a => a.name === 'app.asar');
+        const latestTag = release.tag_name || '';
+        const hasUpdate = compareSemver(latestTag, currentVersion) > 0;
         const setupAsset = release.assets?.find(a => a.name && a.name.endsWith('.exe'));
         const zipAsset = release.assets?.find(a => a.name && a.name.endsWith('.zip'));
 
@@ -1060,12 +1061,13 @@ app.get('/api/app/check-update', async (req, res) => {
           success: true,
           currentVersion,
           latestVersion: latestTag || currentVersion,
+          releaseName: release.name || latestTag,
           hasUpdate,
           releaseNotes: release.body || '',
           downloadUrl: setupAsset?.browser_download_url || release.html_url,
+          setupSize: setupAsset?.size || null,
           zipUrl: zipAsset?.browser_download_url || null,
-          asarUrl: asarAsset?.browser_download_url || null,
-          asarSize: asarAsset?.size || null,
+          zipSize: zipAsset?.size || null,
           publishedAt: release.published_at,
           checkedAt
         });
@@ -1076,7 +1078,7 @@ app.get('/api/app/check-update', async (req, res) => {
           currentVersion,
           latestVersion: currentVersion,
           hasUpdate: false,
-          asarUrl: null,
+          downloadUrl: null,
           zipUrl: null,
           error: errText,
           checkedAt
@@ -1090,21 +1092,21 @@ app.get('/api/app/check-update', async (req, res) => {
         currentVersion,
         latestVersion: currentVersion,
         hasUpdate: false,
-        asarUrl: null,
+        downloadUrl: null,
         zipUrl: null,
         error: isTimeout ? '接続がタイムアウトしました' : 'ネットワークに接続できませんでした',
         checkedAt
       });
     }
   } catch (err) {
-    let fallbackVer = 'v1.1.0';
+    let fallbackVer = 'v1.0.11';
     try { fallbackVer = `v${require('../package.json').version}`; } catch (e) {}
     return res.json({
       success: false,
       currentVersion: fallbackVer,
       latestVersion: fallbackVer,
       hasUpdate: false,
-      asarUrl: null,
+      downloadUrl: null,
       zipUrl: null,
       error: err.message,
       checkedAt
@@ -1128,7 +1130,7 @@ function startServer(port = PORT) {
   });
 }
 
-module.exports = { app, startServer, PORT };
+module.exports = { app, startServer, PORT, compareSemver };
 
 if (require.main === module) {
   startServer();

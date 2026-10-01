@@ -27,14 +27,9 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   // アプリケーション情報取得
   getAppInfo: () => ipcRenderer.invoke('get-app-info'),
 
-  // asar 差分アップデート
-  startAsarUpdate: (options) => ipcRenderer.invoke('start-asar-update', options),
-  applyAsarUpdate: () => ipcRenderer.send('apply-asar-update'),
-
-  // 自動アップデート確認
+  // 自動アップデート (安全・確実な公式 electron-updater)
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
-
-  // 更新適用と再起動（インストーラーのサイレント実行）
+  startDownloadUpdate: () => ipcRenderer.invoke('start-download-update'),
   quitAndInstall: () => ipcRenderer.send('quit-and-install'),
 
   // 自動アップデート状態の受信リスナー
