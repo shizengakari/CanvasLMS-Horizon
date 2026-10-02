@@ -4114,10 +4114,10 @@ function showUpdateModal(updateData) {
   if (!modal) return;
 
   const curVerEl = document.getElementById('update-modal-current-ver');
-  if (curVerEl) curVerEl.textContent = updateData.currentVersion || 'v1.1.2';
+  if (curVerEl) curVerEl.textContent = updateData.currentVersion || 'v1.1.3';
 
   const latestVerEl = document.getElementById('update-modal-latest-ver');
-  if (latestVerEl) latestVerEl.textContent = updateData.latestVersion || 'v1.1.2';
+  if (latestVerEl) latestVerEl.textContent = updateData.latestVersion || 'v1.1.3';
 
   const dateEl = document.getElementById('update-modal-date');
   if (dateEl) {

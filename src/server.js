@@ -1210,7 +1210,7 @@ app.get('/api/app/check-update', async (req, res) => {
       });
     }
   } catch (err) {
-    let fallbackVer = 'v1.1.2';
+    let fallbackVer = 'v1.1.3';
     try { fallbackVer = `v${require('../package.json').version}`; } catch (e) {}
     return res.json({
       success: false,
