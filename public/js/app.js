@@ -1389,21 +1389,32 @@ async function initApp() {
 
     window.desktopAPI.onUpdateStatus((status) => {
       if (status.type === 'available') {
+        const targetVer = status.version ? (status.version.startsWith('v') ? status.version : `v${status.version}`) : 'v1.1.3';
+        const curVer = document.getElementById('app-current-version')?.textContent || 'v1.1.2';
+        currentUpdateData = {
+          currentVersion: curVer,
+          latestVersion: targetVer,
+          releaseNotes: status.releaseNotes || '',
+          publishedAt: status.releaseDate || '',
+          hasUpdate: true
+        };
+
         if (banner && bannerText && restartBtn) {
-          bannerText.textContent = `新バージョン (${status.version || '最新'}) 利用可能`;
+          bannerText.textContent = `新バージョン (${targetVer}) 利用可能`;
           restartBtn.textContent = '詳細 / 更新';
           restartBtn.disabled = false;
           banner.style.display = 'flex';
           banner.style.cursor = 'pointer';
-          banner.onclick = () => {
-            if (currentUpdateData) showUpdateModal(currentUpdateData);
-            else checkAppUpdates(true);
+
+          const openModalHandler = (e) => {
+            if (e) e.stopPropagation();
+            showUpdateModal(currentUpdateData);
+            // 詳細なリリース情報（GitHubからのノート等）があればバックグラウンドで最新化
+            checkAppUpdates(false);
           };
-          restartBtn.onclick = (e) => {
-            e.stopPropagation();
-            if (currentUpdateData) showUpdateModal(currentUpdateData);
-            else checkAppUpdates(true);
-          };
+
+          banner.onclick = openModalHandler;
+          restartBtn.onclick = openModalHandler;
         }
       } else if (status.type === 'progress') {
         isUpdateDownloading = true;
@@ -3683,7 +3694,7 @@ window.addEventListener('keydown', (e) => {
     }
 
     const updateModal = document.getElementById('update-modal');
-    if (updateModal && updateModal.style.display !== 'none') {
+    if (updateModal && (updateModal.classList.contains('open') || updateModal.style.display !== 'none')) {
       closeUpdateModal();
       return;
     }
@@ -4104,17 +4115,29 @@ let isUpdateDownloaded = false;
 
 function closeUpdateModal() {
   const modal = document.getElementById('update-modal');
-  if (modal) modal.style.display = 'none';
+  if (modal) {
+    modal.classList.remove('open');
+    modal.style.display = 'none';
+  }
 }
 
 function showUpdateModal(updateData) {
-  if (!updateData) return;
-  currentUpdateData = updateData;
   const modal = document.getElementById('update-modal');
   if (!modal) return;
 
+  const currentVerText = document.getElementById('app-current-version')?.textContent || 'v1.1.2';
+
+  if (!updateData) {
+    updateData = currentUpdateData || {
+      currentVersion: currentVerText,
+      latestVersion: 'v1.1.3',
+      hasUpdate: true
+    };
+  }
+  currentUpdateData = updateData;
+
   const curVerEl = document.getElementById('update-modal-current-ver');
-  if (curVerEl) curVerEl.textContent = updateData.currentVersion || 'v1.1.3';
+  if (curVerEl) curVerEl.textContent = updateData.currentVersion || currentVerText;
 
   const latestVerEl = document.getElementById('update-modal-latest-ver');
   if (latestVerEl) latestVerEl.textContent = updateData.latestVersion || 'v1.1.3';
@@ -4138,7 +4161,7 @@ function showUpdateModal(updateData) {
     if (updateData.releaseNotes && updateData.releaseNotes.trim()) {
       notesEl.textContent = updateData.releaseNotes.trim();
     } else {
-      notesEl.textContent = `バージョン ${updateData.latestVersion} が利用可能です。\nセキュリティの強化、更新プロセスの信頼性向上、および動作の安定性改善が含まれています。`;
+      notesEl.textContent = `バージョン ${updateData.latestVersion || '最新'} が利用可能です。\nセキュリティの強化、更新プロセスの信頼性向上、および動作の安定性改善が含まれています。`;
     }
   }
 
@@ -4201,6 +4224,7 @@ function showUpdateModal(updateData) {
   }
 
   modal.style.display = 'flex';
+  modal.classList.add('open');
 }
 
 // アプリ全体の自動アップデート確認関数
@@ -4261,8 +4285,9 @@ async function checkAppUpdates(isManual = false) {
         checkUpdateBtn.onclick = () => showUpdateModal(res);
       }
 
-      // 手動で更新確認を押した場合モーダルを即座に開く
-      if (isManual) {
+      // 手動で更新確認を押した場合モーダルを即座に開く、または既に開いていれば最新データで更新
+      const updateModalEl = document.getElementById('update-modal');
+      if (isManual || (updateModalEl && updateModalEl.classList.contains('open'))) {
         showUpdateModal(res);
       } else {
         // 自動確認時は控えめにトースト
