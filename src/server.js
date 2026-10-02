@@ -159,6 +159,38 @@ app.get('/api/dashboard/timeline', async (req, res) => {
   }
 });
 
+// 4.1 手動完了済み課題リストの永続化（再起動後も完全保持）
+const MANUAL_COMPLETED_FILE = path.join(os.homedir(), 'AppData', 'Roaming', 'Canvas Horizon', 'manual_completed.json');
+
+app.get('/api/assignments/manual-completed', (req, res) => {
+  try {
+    if (fs.existsSync(MANUAL_COMPLETED_FILE)) {
+      const data = JSON.parse(fs.readFileSync(MANUAL_COMPLETED_FILE, 'utf-8'));
+      return res.json({ success: true, completedIds: Array.isArray(data) ? data : [] });
+    }
+    res.json({ success: true, completedIds: [] });
+  } catch (e) {
+    res.json({ success: true, completedIds: [] });
+  }
+});
+
+app.post('/api/assignments/manual-completed', (req, res) => {
+  try {
+    const { completedIds } = req.body;
+    if (Array.isArray(completedIds)) {
+      const dir = path.dirname(MANUAL_COMPLETED_FILE);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(MANUAL_COMPLETED_FILE, JSON.stringify(completedIds), 'utf-8');
+      return res.json({ success: true });
+    }
+    res.status(400).json({ success: false, error: 'Invalid data' });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // 5. モジュール一覧
 app.get('/api/courses/:courseId/modules', async (req, res) => {
   try {
@@ -310,6 +342,7 @@ app.get('/api/files/download', async (req, res) => {
     // 0. fileId および courseId の抽出（未指定の場合、URL文字列から自動抽出）
     let fileId = id ? String(id).trim() : null;
     let targetCourseId = courseId ? String(courseId).trim() : null;
+    const verifierParam = req.query.verifier ? String(req.query.verifier).trim() : null;
 
     if (!fileId && targetUrl) {
       const fMatch = targetUrl.match(/\/files\/(\d+)/);
@@ -318,7 +351,11 @@ app.get('/api/files/download', async (req, res) => {
       if (cMatch && !targetCourseId) targetCourseId = cMatch[1];
     }
 
-    const cachedFilePath = fileId ? path.join(PDF_CACHE_DIR, `${fileId}.pdf`) : null;
+    const isPdfRequest = (name && name.toLowerCase().endsWith('.pdf')) || (targetUrl && targetUrl.toLowerCase().includes('.pdf'));
+    const isVideoRequest = (name && /\.(mp4|webm|mkv|mov|m4v|avi|ogv)$/i.test(name)) ||
+                           (targetUrl && /\.(mp4|webm|mkv|mov|m4v|avi|ogv)/i.test(targetUrl));
+
+    const cachedFilePath = (fileId && isPdfRequest && !req.headers.range) ? path.join(PDF_CACHE_DIR, `${fileId}.pdf`) : null;
 
     // 1. キャッシュが存在する場合はローカルファイルを即座に返却（高速化）
     if (cachedFilePath && fs.existsSync(cachedFilePath)) {
@@ -354,7 +391,18 @@ app.get('/api/files/download', async (req, res) => {
       } catch (e) {}
     }
 
-    // 4. Canvas Web画面のプレビュー用ラッパー (wrap=1) を除去し直接ダウンロード指定を付与
+    // 4. verifier パラメータがある場合はURLに補完
+    if (targetUrl && verifierParam) {
+      try {
+        const parsed = new URL(targetUrl);
+        if (!parsed.searchParams.has('verifier')) {
+          parsed.searchParams.set('verifier', verifierParam);
+          targetUrl = parsed.toString();
+        }
+      } catch (e) {}
+    }
+
+    // 5. Canvas Web画面のプレビュー用ラッパー (wrap=1) を除去し直接ダウンロード指定を付与
     if (targetUrl) {
       try {
         const parsed = new URL(targetUrl);
@@ -381,7 +429,7 @@ app.get('/api/files/download', async (req, res) => {
       fetchHeaders['Authorization'] = `Bearer ${cfg.apiToken}`;
     }
 
-    // Rangeリクエストの透過転送（部分読込対応）
+    // Rangeリクエストの透過転送（動画ストリーミング・シーク操作等に必須）
     if (req.headers.range) {
       fetchHeaders['Range'] = req.headers.range;
     }
@@ -389,7 +437,7 @@ app.get('/api/files/download', async (req, res) => {
     let fileRes = await fetch(targetUrl, {
       headers: fetchHeaders,
       redirect: 'follow',
-      signal: AbortSignal.timeout(30000)
+      signal: AbortSignal.timeout(60000)
     });
 
     if (!fileRes.ok && urlHost === canvasHost) {
@@ -399,7 +447,7 @@ app.get('/api/files/download', async (req, res) => {
         fileRes = await fetch(retryUrl.toString(), {
           headers: fetchHeaders,
           redirect: 'follow',
-          signal: AbortSignal.timeout(30000)
+          signal: AbortSignal.timeout(60000)
         });
       } catch (retryErr) {}
     }
@@ -408,9 +456,11 @@ app.get('/api/files/download', async (req, res) => {
       return res.status(fileRes.status).send(`Failed to fetch file: ${fileRes.statusText}`);
     }
 
-    let contentType = fileRes.headers.get('content-type') || 'application/pdf';
-    // PDF 要求であること、またはファイル名が PDF であれば content-type を application/pdf に補正
-    if ((name && name.toLowerCase().endsWith('.pdf')) || targetUrl.toLowerCase().includes('.pdf') || contentType.includes('application/octet-stream')) {
+    let contentType = fileRes.headers.get('content-type') || 'application/octet-stream';
+    if (isVideoRequest || contentType.startsWith('video/') || contentType === 'application/mp4') {
+      if (name && name.toLowerCase().endsWith('.webm')) contentType = 'video/webm';
+      else contentType = 'video/mp4';
+    } else if (isPdfRequest || contentType.includes('application/octet-stream')) {
       contentType = 'application/pdf';
     }
 
@@ -426,7 +476,7 @@ app.get('/api/files/download', async (req, res) => {
     if (contentRange) res.setHeader('Content-Range', contentRange);
     res.setHeader('Cache-Control', 'public, max-age=86400');
 
-    // キャッシュ保存用ストリーム
+    // キャッシュ保存用ストリーム（PDFかつ全体リクエスト時のみ安全に書き込み）
     const cacheWriteStream = cachedFilePath ? fs.createWriteStream(cachedFilePath) : null;
 
     // ストリーミング転送
@@ -447,6 +497,58 @@ app.get('/api/files/download', async (req, res) => {
     if (!res.headersSent) {
       res.status(500).send('Error downloading file: ' + err.message);
     }
+  }
+});
+
+// 10.1 メディアオブジェクト（動画/音声）URL解決エンドポイント
+app.get('/api/media/resolve', async (req, res) => {
+  try {
+    const { entryId, attachmentId, courseId } = req.query;
+    const cfg = loadConfig();
+
+    if (attachmentId) {
+      try {
+        const fileData = await canvasService.resolveFileDownload(attachmentId, courseId);
+        if (fileData) {
+          return res.json({
+            success: true,
+            title: fileData.display_name || fileData.filename || '講義動画',
+            url: fileData.url,
+            streamUrl: `/api/files/download?id=${attachmentId}&courseId=${courseId || ''}&inline=true&name=${encodeURIComponent(fileData.display_name || 'video.mp4')}`,
+            size: fileData.size,
+            contentType: fileData['content-type'] || 'video/mp4'
+          });
+        }
+      } catch (fErr) {
+        console.warn('resolveFileDownload for media failed:', fErr.message);
+      }
+    }
+
+    if (entryId && courseId) {
+      try {
+        const mediaDownloadUrl = `${cfg.baseUrl.replace(/\/$/, '')}/courses/${courseId}/media_download?entryId=${encodeURIComponent(entryId)}&type=mp4`;
+        const r = await fetch(mediaDownloadUrl, {
+          headers: { 'Authorization': `Bearer ${cfg.apiToken}` },
+          signal: AbortSignal.timeout(10000)
+        });
+        if (r.ok) {
+          const data = await r.json();
+          if (data && data.url) {
+            return res.json({
+              success: true,
+              url: data.url,
+              streamUrl: data.url
+            });
+          }
+        }
+      } catch (mErr) {
+        console.warn('media_download endpoint failed:', mErr.message);
+      }
+    }
+
+    res.status(404).json({ success: false, error: 'Media not found' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -1108,7 +1210,7 @@ app.get('/api/app/check-update', async (req, res) => {
       });
     }
   } catch (err) {
-    let fallbackVer = 'v1.1.0';
+    let fallbackVer = 'v1.1.2';
     try { fallbackVer = `v${require('../package.json').version}`; } catch (e) {}
     return res.json({
       success: false,

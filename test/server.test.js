@@ -179,7 +179,7 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     assert.ok(js.includes('visibilitychange'), 'Should listen for visibilitychange to suspend background resources');
   });
 
-  it('should ensure 24h urgency metrics, grouping headers, and blue-tinted submit button', async () => {
+  it('should ensure 24h urgency metrics, grouping headers, manual complete, and blue-tinted submit button', async () => {
     const [cssRes, jsRes] = await Promise.all([
       fetch(`${baseUrl}/css/style.css`),
       fetch(`${baseUrl}/js/app.js`)
@@ -187,29 +187,32 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     const css = await cssRes.text();
     const js = await jsRes.text();
 
-    // 1. タイムラインセクションの表記が「24時間以内」「まもなく」であること
+    // 1. タイムラインセクションの表記が「24時間以内」「1週間以内」に統一され重複が解消されていること
     assert.ok(js.includes("title: '24時間以内'"), 'Should use 24時間以内 as timeline section title');
-    assert.ok(js.includes("badge: 'まもなく'"), 'Should use まもなく as urgent timeline section badge');
+    assert.ok(js.includes("title: '1週間以内'"), 'Should use 1週間以内 as this week section title');
+    assert.ok(js.includes("isAssignmentManuallyCompleted"), 'Should support manual complete check');
 
-    // 2. 課題カードの提出ボタンに action-submit クラスが指定されていること
+    // 2. 課題カードの提出ボタンおよび手動完了ボタンが指定されていること
     assert.ok(js.includes('btn-submit-action action-chip-btn action-submit'), 'Submit button should use action-submit class');
+    assert.ok(js.includes('btn-manual-complete-toggle'), 'Should include manual complete toggle button');
 
     // 3. 提出ボタンのスタイルが科目タブのような青っぽい色（#8ab4f8）で定義されていること
     assert.ok(css.includes('.btn-submit-action'), 'Submit button style should be defined');
     assert.ok(css.includes('#8ab4f8'), 'CSS should include Google blue accent color');
     assert.ok(css.includes('rgba(138, 180, 248,'), 'CSS should include blue tint for submit button');
 
-    // 4. 24時間以内の課題判定が diffHours <= 24 で行われていること
-    assert.ok(js.includes('diffHours <= 24'), 'Should include urgent assignments correctly within 24 hours');
+    // 4. 24時間以内の課題判定および24時間超過課題の除外が行われていること
+    assert.ok(js.includes('diffHours >= -24 && diffHours <= 24'), 'Should include urgent assignments correctly within 24 hours window');
   });
 
-  it('should ensure announcement PDF links and attachments open seamlessly in built-in PDF viewer', async () => {
+  it('should ensure announcement PDF links, embedded video cards and attachments open seamlessly', async () => {
     const jsRes = await fetch(`${baseUrl}/js/app.js`);
     const js = await jsRes.text();
 
-    // 1. setupContentLinks が定義され、PDFリンクが内蔵エディタにバインドされること
+    // 1. setupContentLinks が定義され、PDFリンクおよび埋め込み動画がサポートされること
     assert.ok(js.includes('function setupContentLinks'), 'Should define setupContentLinks');
     assert.ok(js.includes('openPdfPreviewModal'), 'Should call openPdfPreviewModal for inline PDF links');
+    assert.ok(js.includes('embedded-video-card'), 'Should render embedded video cards');
 
     // 2. お知らせレンダリングで setupContentLinks と添付ファイル処理が行われること
     assert.ok(js.includes('setupContentLinks(bodyEl, courseId)'), 'Should bind links in announcement body');

@@ -4,6 +4,7 @@
  */
 
 const STORAGE_KEY_BATTERY_MODE = 'canvas_horizon_battery_mode';
+const STORAGE_KEY_MANUAL_COMPLETED = 'canvas_horizon_manual_completed';
 
 // アプリケーション全体の状態管理 (State)
 const state = {
@@ -34,8 +35,35 @@ const state = {
     return 'auto';
   })(), // 'auto' | 'on' | 'off'
   isBatterySaving: false,
-  isOnBattery: false
+  isOnBattery: false,
+  manualCompletedAssignments: (() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_MANUAL_COMPLETED);
+      return new Set(saved ? JSON.parse(saved) : []);
+    } catch (_) {
+      return new Set();
+    }
+  })()
 };
+
+function isAssignmentManuallyCompleted(id) {
+  return state.manualCompletedAssignments.has(String(id));
+}
+
+function toggleAssignmentManualComplete(id) {
+  const sId = String(id);
+  if (state.manualCompletedAssignments.has(sId)) {
+    state.manualCompletedAssignments.delete(sId);
+  } else {
+    state.manualCompletedAssignments.add(sId);
+  }
+  const completedArray = [...state.manualCompletedAssignments];
+  try {
+    localStorage.setItem(STORAGE_KEY_MANUAL_COMPLETED, JSON.stringify(completedArray));
+  } catch (_) {}
+  // サーバー（AppDataディスクストレージ）へも永続化保存
+  api.post('/api/assignments/manual-completed', { completedIds: completedArray }).catch(() => {});
+}
 
 // ユーティリティ関数群
 const utils = {
@@ -66,8 +94,9 @@ const utils = {
     return `${yearPrefix}${m}月${date}日(${day}) ${h}:${min}`;
   },
 
-  getDueUrgency(isoString, isSubmitted) {
-    if (isSubmitted) return { text: '提出済み', level: 'submitted' };
+  getDueUrgency(isoString, isSubmitted, assignmentId = null) {
+    const isManuallyDone = assignmentId ? isAssignmentManuallyCompleted(assignmentId) : false;
+    if (isSubmitted || isManuallyDone) return { text: isSubmitted ? '提出済み' : '完了', level: 'submitted' };
     if (!isoString) return { text: '期限なし', level: 'none' };
     const now = new Date();
     const due = new Date(isoString);
@@ -76,7 +105,7 @@ const utils = {
     if (diffMs < 0) {
       const diffHours = Math.floor(Math.abs(diffMs) / (1000 * 60 * 60));
       if (diffHours < 24) return { text: '本日締切超過', level: 'urgent' };
-      return { text: `${Math.floor(diffHours / 24)}日前に締切`, level: 'urgent' };
+      return { text: `${Math.floor(diffHours / 24)}日前に締切`, level: 'overdue' };
     }
 
     const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
@@ -1260,6 +1289,25 @@ async function initApp() {
   setupMaterialsViewEvents();
   downloadManager.init();
 
+  // 0. 手動完了済みリストのディスク同期（再起動後も確実に復元）
+  api.get('/api/assignments/manual-completed').then(res => {
+    if (res.success && Array.isArray(res.completedIds)) {
+      let changed = false;
+      res.completedIds.forEach(id => {
+        if (!state.manualCompletedAssignments.has(String(id))) {
+          state.manualCompletedAssignments.add(String(id));
+          changed = true;
+        }
+      });
+      if (changed) {
+        try {
+          localStorage.setItem(STORAGE_KEY_MANUAL_COMPLETED, JSON.stringify([...state.manualCompletedAssignments]));
+        } catch (_) {}
+        renderAssignmentsList();
+      }
+    }
+  }).catch(() => {});
+
   // 1. プロファイル・設定の取得 & 起動画面の決定
   api.get('/api/me').then(meRes => {
     const isConfigured = Boolean(
@@ -1661,16 +1709,16 @@ function updateAssignmentMetrics(assignments = null) {
     list = list.filter(a => a.isCurrentQuarter);
   }
 
-  const pending = list.filter(a => !a.isSubmitted);
-  const submitted = list.filter(a => a.isSubmitted);
+  const pending = list.filter(a => !a.isSubmitted && !isAssignmentManuallyCompleted(a.id));
+  const submitted = list.filter(a => a.isSubmitted || isAssignmentManuallyCompleted(a.id));
 
   const now = new Date();
   const urgent = pending.filter(a => {
     if (!a.dueAt) return false;
     const due = new Date(a.dueAt);
     const diffHours = (due - now) / (1000 * 60 * 60);
-    // 締切まで24時間以内、または締切直後の危険な課題
-    return diffHours <= 24;
+    // 締切直前24時間以内および締切直後24時間以内（24時間以上超過したものは除外）
+    return diffHours >= -24 && diffHours <= 24;
   });
 
   const urgentEl = document.getElementById('stat-urgent-val');
@@ -1714,19 +1762,19 @@ function renderAssignmentsList() {
 
   // 1. ステータスフィルター
   if (state.assignmentFilter === 'unsubmitted') {
-    filtered = filtered.filter(a => !a.isSubmitted);
+    filtered = filtered.filter(a => !a.isSubmitted && !isAssignmentManuallyCompleted(a.id));
   } else if (state.assignmentFilter === 'submitted') {
-    filtered = filtered.filter(a => a.isSubmitted && !a.isGraded);
+    filtered = filtered.filter(a => (a.isSubmitted || isAssignmentManuallyCompleted(a.id)) && !a.isGraded);
   } else if (state.assignmentFilter === 'graded') {
     filtered = filtered.filter(a => a.isGraded);
   } else if (state.assignmentFilter === 'urgent') {
-    // 24時間以内（締切超過含む危険な課題）
+    // 24時間以内（締切前24時間〜締切直後24時間）
     const now = new Date();
     filtered = filtered.filter(a => {
-      if (a.isSubmitted || !a.dueAt) return false;
+      if (a.isSubmitted || isAssignmentManuallyCompleted(a.id) || !a.dueAt) return false;
       const due = new Date(a.dueAt);
       const diffHours = (due - now) / (1000 * 60 * 60);
-      return diffHours <= 24;
+      return diffHours >= -24 && diffHours <= 24;
     });
   }
 
@@ -1808,31 +1856,31 @@ function renderAssignmentsList() {
   }
 }
 
-// タイムラインセクション別グルーピング描画 (アイコンを排した極めてシンプルなタイポグラフィ)
+// タイムラインセクション別グルーピング描画 (重複表記を廃止した極めてシンプルで洗練された見出し)
 function renderGroupedTimelineList(container, assignments) {
   const now = new Date();
 
   const groups = {
     urgent: {
       title: '24時間以内',
-      badge: 'まもなく',
+      badge: '', // 「まもなく」などの重複を廃止し単一表記に統一
       cls: 'urgent',
       items: []
     },
     thisWeek: {
-      title: '今週中の課題',
-      badge: '7日以内',
+      title: '1週間以内', // 「今週中の課題」と「7日以内」の重複を「1週間以内」に一本化
+      badge: '',
       cls: 'this-week',
       items: []
     },
     later: {
-      title: '来週以降の課題',
+      title: '1週間以降',
       badge: '',
       cls: 'later',
       items: []
     },
     submitted: {
-      title: '提出済み・採点済み',
+      title: '完了・提出済み',
       badge: '',
       cls: 'submitted',
       items: []
@@ -1846,7 +1894,8 @@ function renderGroupedTimelineList(container, assignments) {
   };
 
   assignments.forEach(a => {
-    if (a.isSubmitted || a.isGraded) {
+    const isDone = a.isSubmitted || a.isGraded || isAssignmentManuallyCompleted(a.id);
+    if (isDone) {
       groups.submitted.items.push(a);
       return;
     }
@@ -1856,6 +1905,12 @@ function renderGroupedTimelineList(container, assignments) {
     }
     const due = new Date(a.dueAt);
     const diffHours = (due - now) / (1000 * 60 * 60);
+
+    // 締め切りが24時間以上過ぎた未提出かつ未完了のものは自動非表示にする
+    if (diffHours < -24) {
+      return;
+    }
+
     if (diffHours <= 24) {
       groups.urgent.items.push(a);
     } else if (diffHours <= 7 * 24) {
@@ -1889,12 +1944,14 @@ function renderGroupedTimelineList(container, assignments) {
 
 function createAssignmentCardElement(a) {
   const card = document.createElement('div');
-  const urgency = utils.getDueUrgency(a.dueAt, a.isSubmitted);
+  const isManualDone = isAssignmentManuallyCompleted(a.id);
+  const isDone = a.isSubmitted || a.isGraded || isManualDone;
+  const urgency = utils.getDueUrgency(a.dueAt, a.isSubmitted, a.id);
   const color = utils.getCourseColor(a.courseName || a.courseId);
 
   let statusCls = urgency.level;
   if (a.isGraded) statusCls = 'graded';
-  else if (a.isSubmitted) statusCls = 'submitted';
+  else if (a.isSubmitted || isManualDone) statusCls = 'submitted';
 
   card.className = `assignment-card ${statusCls}`;
   
@@ -1907,11 +1964,24 @@ function createAssignmentCardElement(a) {
     badgeHtml = `<span class="badge badge-submitted">採点済み (${a.submission?.score ?? ''}点)</span>`;
   } else if (a.isSubmitted) {
     badgeHtml = '<span class="badge badge-submitted"><svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg> 提出済み</span>';
+  } else if (isManualDone) {
+    badgeHtml = '<span class="badge badge-submitted"><svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg> 完了マーク</span>';
   } else if (urgency.level === 'urgent') {
     badgeHtml = `<span class="badge badge-urgent"><svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> ${urgency.text}</span>`;
   } else if (urgency.level === 'pending') {
     badgeHtml = `<span class="badge badge-pending">${urgency.text}</span>`;
   }
+
+  // 手動完了マーク切替ボタン
+  const completeToggleBtnHtml = isDone
+    ? `<button type="button" class="btn-manual-complete-toggle action-chip-btn action-completed" title="${isManualDone ? '未完了に戻す' : '提出完了済み'}">
+        <svg class="btn-icon" width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+        <span>${isManualDone ? '手動完了' : '完了'}</span>
+       </button>`
+    : `<button type="button" class="btn-manual-complete-toggle action-chip-btn action-check" title="完了マークをつける (手動完了)">
+        <svg class="btn-icon" width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+        <span>完了</span>
+       </button>`;
 
   // アクションボタン (保存ボタン action-chip-btn と統一規格のピルデザイン・適正サイズ)
   const actionBtnHtml = a.isSubmitted
@@ -1944,9 +2014,20 @@ function createAssignmentCardElement(a) {
       </div>
     </div>
     <div class="assignment-right">
+      ${completeToggleBtnHtml}
       ${actionBtnHtml}
     </div>
   `;
+
+  // 手動完了ボタンのクリック処理（カードクリックへの伝播を防止）
+  const completeBtn = card.querySelector('.btn-manual-complete-toggle');
+  if (completeBtn) {
+    completeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleAssignmentManualComplete(a.id);
+      renderAssignmentsList();
+    });
+  }
 
   card.addEventListener('click', () => {
     openAssignmentModal(a);
@@ -3625,9 +3706,125 @@ async function loadAnnouncements() {
   }
 }
 
-// リッチテキストコンテンツ内のファイルリンク・外部リンクのインターセプト
+// リッチテキストコンテンツ内の動画埋め込み・ファイルリンク・外部リンクの包括的解決
 function setupContentLinks(container, defaultCourseId = null) {
   if (!container) return;
+
+  // 1. Canvas のメディア埋め込み iframe (media_attachments_iframe, media_objects_iframe) の検出と高機能プレイヤー化
+  const iframes = Array.from(container.querySelectorAll('iframe'));
+  iframes.forEach(iframe => {
+    const src = iframe.getAttribute('src') || '';
+    const titleAttr = iframe.getAttribute('title') || '';
+    let cleanTitle = titleAttr.replace(/のビデオプレーヤー.*$/i, '').trim();
+
+    // 1-1. media_attachments_iframe (Canvas 添付ファイル動画)
+    const attMatch = src.match(/media_attachments_iframe\/(\d+)/);
+    if (attMatch) {
+      const attachmentId = attMatch[1];
+      const vMatch = src.match(/[?&]verifier=([a-zA-Z0-9\-_]+)/);
+      const verifier = vMatch ? vMatch[1] : '';
+      if (!cleanTitle) cleanTitle = `講義動画 (${attachmentId})`;
+      if (!/\.(mp4|webm|mov|mkv)$/i.test(cleanTitle)) cleanTitle += '.mp4';
+
+      const streamUrl = `/api/files/download?id=${attachmentId}&verifier=${encodeURIComponent(verifier)}&courseId=${defaultCourseId || ''}&inline=true&name=${encodeURIComponent(cleanTitle)}`;
+
+      const videoCard = document.createElement('div');
+      videoCard.className = 'embedded-video-card';
+      videoCard.innerHTML = `
+        <div class="embedded-video-header">
+          <div class="embedded-video-title" title="${utils.escapeHtml(cleanTitle)}">
+            <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span>${utils.escapeHtml(cleanTitle)}</span>
+          </div>
+          <div class="embedded-video-actions">
+            <button type="button" class="action-chip-btn action-download btn-save-embedded-video" title="ダウンロードフォルダに保存">
+              <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+              <span>保存</span>
+            </button>
+          </div>
+        </div>
+        <div class="embedded-video-player-wrapper">
+          <video class="embedded-video-player" controls preload="metadata" playsinline src="${streamUrl}">
+            お使いの環境では動画タグの直接再生がサポートされていません。
+          </video>
+        </div>
+      `;
+
+      const saveBtn = videoCard.querySelector('.btn-save-embedded-video');
+      if (saveBtn) {
+        saveBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          downloadSingleFile({
+            id: attachmentId,
+            url: streamUrl,
+            name: cleanTitle,
+            courseId: defaultCourseId
+          });
+        });
+      }
+
+      iframe.parentNode.replaceChild(videoCard, iframe);
+      return;
+    }
+
+    // 1-2. media_objects_iframe (Kaltura / Canvas Media Object)
+    const objMatch = src.match(/media_objects_iframe\/(m-[a-zA-Z0-9\-_]+)/);
+    if (objMatch) {
+      const mediaId = objMatch[1];
+      if (!cleanTitle) cleanTitle = `講義メディア (${mediaId})`;
+      
+      const videoCard = document.createElement('div');
+      videoCard.className = 'embedded-video-card';
+      videoCard.innerHTML = `
+        <div class="embedded-video-header">
+          <div class="embedded-video-title" title="${utils.escapeHtml(cleanTitle)}">
+            <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span>${utils.escapeHtml(cleanTitle)}</span>
+          </div>
+        </div>
+        <div class="embedded-video-player-wrapper">
+          <video class="embedded-video-player" controls preload="metadata" playsinline>
+            動画ストリームを解決中...
+          </video>
+        </div>
+      `;
+
+      iframe.parentNode.replaceChild(videoCard, iframe);
+
+      api.get(`/api/media/resolve?entryId=${encodeURIComponent(mediaId)}&courseId=${defaultCourseId || ''}`)
+        .then(res => {
+          if (res.success && res.streamUrl) {
+            const v = videoCard.querySelector('video');
+            if (v) v.src = res.streamUrl;
+          }
+        }).catch(() => {});
+      return;
+    }
+  });
+
+  // 2. 既存の <video> / <source> タグの相対パス補正
+  container.querySelectorAll('video, audio').forEach(mediaEl => {
+    mediaEl.classList.add('embedded-video-player');
+    const src = mediaEl.getAttribute('src');
+    if (src && (src.startsWith('/') || src.includes('instructure.com'))) {
+      const fMatch = src.match(/\/files\/(\d+)/);
+      if (fMatch) {
+        mediaEl.src = `/api/files/download?id=${fMatch[1]}&courseId=${defaultCourseId || ''}&inline=true`;
+      }
+    }
+    mediaEl.querySelectorAll('source').forEach(s => {
+      const sSrc = s.getAttribute('src');
+      if (sSrc && (sSrc.startsWith('/') || sSrc.includes('instructure.com'))) {
+        const sfMatch = sSrc.match(/\/files\/(\d+)/);
+        if (sfMatch) {
+          s.src = `/api/files/download?id=${sfMatch[1]}&courseId=${defaultCourseId || ''}&inline=true`;
+        }
+      }
+    });
+  });
+
+  // 3. リンクのインターセプト（PDFビューア、動画ファイル、外部リンク）
   container.querySelectorAll('a').forEach(link => {
     const href = link.getAttribute('href') || '';
     const text = link.textContent.trim();
@@ -3640,14 +3837,18 @@ function setupContentLinks(container, defaultCourseId = null) {
                   title.toLowerCase().includes('.pdf') ||
                   link.dataset.apiReturntype === 'File';
 
+    const isVideo = href.match(/\.(mp4|webm|mov|mkv)$/i) ||
+                    text.match(/\.(mp4|webm|mov|mkv)$/i) ||
+                    title.match(/\.(mp4|webm|mov|mkv)$/i);
+
     const isCanvasFile = href.includes('/files/') ||
                          endpoint.includes('/files/') ||
                          link.classList.contains('instructure_file_link');
 
     if (isPdf || isCanvasFile) {
-      link.classList.add('inline-pdf-link');
+      link.classList.add(isPdf ? 'inline-pdf-link' : 'inline-file-link');
       link.style.cursor = 'pointer';
-      link.title = isPdf ? '内蔵PDFビューアでプレビュー' : 'ファイルをダウンロード';
+      link.title = isPdf ? '内蔵PDFビューアでプレビュー' : (isVideo ? '動画を再生またはダウンロード' : 'ファイルをダウンロード');
 
       link.addEventListener('click', (e) => {
         e.preventDefault();
@@ -3660,20 +3861,28 @@ function setupContentLinks(container, defaultCourseId = null) {
         const cMatch = endpointOrHref.match(/\/courses\/(\d+)/);
         const courseId = cMatch ? cMatch[1] : (defaultCourseId || state.materialsCourseId || null);
 
-        let safeName = text || title || 'document.pdf';
-        safeName = safeName.replace(/[\r\n\t]+/g, ' ').trim() || 'document.pdf';
+        let safeName = text || title || (isPdf ? 'document.pdf' : (isVideo ? 'video.mp4' : 'download'));
+        safeName = safeName.replace(/[\r\n\t]+/g, ' ').trim() || (isPdf ? 'document.pdf' : 'download');
         if (!safeName.toLowerCase().endsWith('.pdf') && isPdf) {
           safeName += '.pdf';
         }
 
-        let previewUrl;
-        if (fileId) {
-          previewUrl = `/api/files/download?id=${fileId}&courseId=${courseId || ''}&inline=true&name=${encodeURIComponent(safeName)}`;
+        if (isPdf) {
+          let previewUrl;
+          if (fileId) {
+            previewUrl = `/api/files/download?id=${fileId}&courseId=${courseId || ''}&inline=true&name=${encodeURIComponent(safeName)}`;
+          } else {
+            previewUrl = `/api/files/download?url=${encodeURIComponent(href)}&courseId=${courseId || ''}&inline=true&name=${encodeURIComponent(safeName)}`;
+          }
+          openPdfPreviewModal(previewUrl, safeName, fileId, courseId);
         } else {
-          previewUrl = `/api/files/download?url=${encodeURIComponent(href)}&courseId=${courseId || ''}&inline=true&name=${encodeURIComponent(safeName)}`;
+          downloadSingleFile({
+            id: fileId,
+            url: href,
+            name: safeName,
+            courseId: courseId
+          });
         }
-
-        openPdfPreviewModal(previewUrl, safeName, fileId, courseId);
       });
     } else if (href && href !== '#' && !href.startsWith('javascript:')) {
       link.addEventListener('click', (e) => {
@@ -3905,10 +4114,10 @@ function showUpdateModal(updateData) {
   if (!modal) return;
 
   const curVerEl = document.getElementById('update-modal-current-ver');
-  if (curVerEl) curVerEl.textContent = updateData.currentVersion || 'v1.1.0';
+  if (curVerEl) curVerEl.textContent = updateData.currentVersion || 'v1.1.2';
 
   const latestVerEl = document.getElementById('update-modal-latest-ver');
-  if (latestVerEl) latestVerEl.textContent = updateData.latestVersion || 'v1.1.0';
+  if (latestVerEl) latestVerEl.textContent = updateData.latestVersion || 'v1.1.2';
 
   const dateEl = document.getElementById('update-modal-date');
   if (dateEl) {

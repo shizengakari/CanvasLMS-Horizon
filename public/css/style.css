@@ -2541,6 +2541,32 @@ a:hover {
   box-shadow: 0 2px 10px rgba(253, 214, 99, 0.28);
 }
 
+/* 7. 手動完了ボタン */
+.action-chip-btn.action-check {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--text-muted);
+}
+.action-chip-btn.action-check svg { color: var(--text-muted); }
+.action-chip-btn.action-check:hover {
+  background: rgba(129, 201, 149, 0.16);
+  border-color: rgba(129, 201, 149, 0.4);
+  color: #81c995;
+}
+.action-chip-btn.action-check:hover svg { color: #81c995; }
+
+.action-chip-btn.action-completed {
+  background: rgba(129, 201, 149, 0.14);
+  border: 1px solid rgba(129, 201, 149, 0.38);
+  color: #81c995;
+}
+.action-chip-btn.action-completed svg { color: #81c995; }
+.action-chip-btn.action-completed:hover {
+  background: rgba(129, 201, 149, 0.24);
+  border-color: rgba(129, 201, 149, 0.6);
+  color: #a7f3d0;
+}
+
 /* ライトテーマ */
 [data-theme="light"] .action-chip-btn.action-submit {
   background: #e8f0fe;
@@ -2587,6 +2613,28 @@ a:hover {
   background: #fef7e0;
   border-color: #feefc3;
   color: #b06000;
+}
+[data-theme="light"] .action-chip-btn.action-check {
+  background: #f8f9fa;
+  border-color: #dadce0;
+  color: #5f6368;
+}
+[data-theme="light"] .action-chip-btn.action-check svg { color: #5f6368; }
+[data-theme="light"] .action-chip-btn.action-check:hover {
+  background: #e6f4ea;
+  border-color: #ceead6;
+  color: #137333;
+}
+[data-theme="light"] .action-chip-btn.action-check:hover svg { color: #137333; }
+[data-theme="light"] .action-chip-btn.action-completed {
+  background: #e6f4ea;
+  border-color: #ceead6;
+  color: #137333;
+}
+[data-theme="light"] .action-chip-btn.action-completed svg { color: #137333; }
+[data-theme="light"] .action-chip-btn.action-completed:hover {
+  background: #ceead6;
+  color: #0d652d;
 }
 
 /* ==========================================================================
@@ -3363,6 +3411,84 @@ a:hover {
   background: #eef2ff;
   border-color: #c7d2fe;
   color: #3730a3;
+}
+
+/* 講義ノート・課題説明文内の埋め込み動画カード */
+.embedded-video-card {
+  margin: 16px 0;
+  border-radius: var(--radius-lg, 12px);
+  background: var(--bg-card, #1e293b);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+}
+
+.embedded-video-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  gap: 12px;
+}
+
+.embedded-video-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main, #e2e8f0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.embedded-video-title svg {
+  color: #f28b82;
+  flex-shrink: 0;
+}
+
+.embedded-video-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.embedded-video-player-wrapper {
+  position: relative;
+  width: 100%;
+  background: #000000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.embedded-video-player {
+  width: 100%;
+  max-height: 520px;
+  display: block;
+  outline: none;
+  background: #000000;
+}
+
+[data-theme="light"] .embedded-video-card {
+  background: #ffffff;
+  border-color: #e2e8f0;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .embedded-video-header {
+  background: #f8fafc;
+  border-bottom-color: #edf2f7;
+}
+
+[data-theme="light"] .embedded-video-title {
+  color: #1e293b;
 }
 
 /* ==========================================================================
