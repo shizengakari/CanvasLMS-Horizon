@@ -6,6 +6,12 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, powerMonitor, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs = require('fs');
+let ofs = fs;
+try {
+  ofs = require('original-fs');
+} catch (_) {
+  ofs = fs;
+}
 const { spawn } = require('child_process');
 
 // ネイティブメニューバーの無効化
@@ -361,12 +367,13 @@ if (!gotTheLock) {
       const totalBytes = asarAsset.size || 0;
       const updateDir = path.join(app.getPath('userData'), 'pending-update');
       if (!fs.existsSync(updateDir)) fs.mkdirSync(updateDir, { recursive: true });
-      const pendingFile = path.join(updateDir, 'app.asar');
+      // Electron の asar hook による Invalid package 例外を完全に回避するため拡張子は .bin とする
+      const pendingFile = path.join(updateDir, 'app.update.bin');
 
       const downloadResp = await fetch(downloadUrl);
       if (!downloadResp.ok) throw new Error(`ダウンロード失敗: HTTP ${downloadResp.status}`);
 
-      const fileStream = fs.createWriteStream(pendingFile);
+      const fileStream = ofs.createWriteStream(pendingFile);
       const reader = downloadResp.body.getReader();
       let receivedBytes = 0;
       let lastProgressTime = 0;
@@ -391,7 +398,12 @@ if (!gotTheLock) {
           }
         }
       }
-      fileStream.end();
+
+      await new Promise((resolve, reject) => {
+        fileStream.on('finish', resolve);
+        fileStream.on('error', reject);
+        fileStream.end();
+      });
 
       pendingAsarUpdate = {
         version: release.tag_name,
@@ -435,11 +447,15 @@ if (!gotTheLock) {
     if (pendingAsarUpdate && fs.existsSync(pendingAsarUpdate.pendingFile)) {
       // Windows用ホットパッチ再起動バッチスクリプト
       const updateDir = path.dirname(pendingAsarUpdate.pendingFile);
-      const batPath = path.join(updateDir, 'apply-update.bat');
       const batContent = `@echo off
 chcp 65001 >nul
 timeout /t 1 /nobreak >nul
-copy /y "${pendingAsarUpdate.pendingFile}" "${pendingAsarUpdate.targetAsar}" >nul
+:retry
+copy /y "${pendingAsarUpdate.pendingFile}" "${pendingAsarUpdate.targetAsar}" >nul 2>&1
+if errorlevel 1 (
+  timeout /t 1 /nobreak >nul
+  goto retry
+)
 start "" "${pendingAsarUpdate.exePath}"
 del "${pendingAsarUpdate.pendingFile}" >nul 2>&1
 (goto) 2>nul & del "%~f0"
