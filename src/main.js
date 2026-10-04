@@ -27,14 +27,8 @@ if (process.stderr && typeof process.stderr.on === 'function') {
   process.stderr.on('error', (err) => { if (err && err.code === 'EPIPE') return; });
 }
 
-const { startServer, PORT } = require('./server');
+const { startServer, PORT, compareSemver } = require('./server');
 const { loadConfig } = require('./config');
-const { autoUpdater } = require('electron-updater');
-
-// 自動アップデートの設定 (electron-updater による安全・確実なNSIS更新)
-autoUpdater.autoDownload = false;
-autoUpdater.autoInstallOnAppQuit = true;
-autoUpdater.logger = console;
 
 let mainWindow = null;
 let serverInstance = null;
@@ -136,7 +130,7 @@ if (!gotTheLock) {
         showWindow();
         if (app.isPackaged) {
           setTimeout(() => {
-            autoUpdater.checkForUpdates().catch(() => {});
+            checkAsarUpdate().catch(() => {});
           }, 3000);
         }
       });
@@ -275,18 +269,74 @@ if (!gotTheLock) {
     isPortable: Boolean(process.env.PORTABLE_EXECUTABLE_DIR)
   }));
 
-  // 自動アップデート用 IPC ハンドラ (electron-updater 安全パイプライン)
-  ipcMain.handle('check-for-updates', async () => {
+  // ==========================================
+  // 自動アップデート用 (SmartScreen/Defender完全回避 Asar ホットパッチ更新)
+  // ==========================================
+  let pendingAsarUpdate = null; // { version, pendingFile, targetAsar, exePath }
+
+  async function checkAsarUpdate() {
     if (!app.isPackaged) {
       return { status: 'dev-mode', message: '開発環境のためスキップします' };
     }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-status', { type: 'checking' });
+    }
     try {
-      const result = await autoUpdater.checkForUpdates();
-      return { status: 'checked', updateInfo: result?.updateInfo };
+      const pkg = require('../package.json');
+      const currentVersion = `v${pkg.version}`;
+      const cfg = loadConfig();
+      const repo = cfg.githubRepo || 'shizengakari/CanvasLMS-Horizon';
+      const resp = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+        headers: {
+          'User-Agent': 'CanvasHorizon-App',
+          'Accept': 'application/vnd.github.v3+json',
+          'Cache-Control': 'no-cache'
+        }
+      });
+      if (!resp.ok) {
+        throw new Error(`GitHub API HTTP ${resp.status}`);
+      }
+      const release = await resp.json();
+      const latestTag = release.tag_name || '';
+      const hasUpdate = compareSemver(latestTag, currentVersion) > 0;
+      const asarAsset = release.assets?.find(a => a.name === 'app.asar');
+
+      if (hasUpdate && asarAsset) {
+        const updateData = {
+          type: 'available',
+          version: latestTag,
+          releaseNotes: release.body || '',
+          releaseDate: release.published_at,
+          downloadUrl: asarAsset.browser_download_url,
+          size: asarAsset.size
+        };
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('update-status', updateData);
+        }
+        return { status: 'available', updateInfo: updateData };
+      } else {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('update-status', {
+            type: 'not-available',
+            version: latestTag || currentVersion
+          });
+        }
+        return { status: 'not-available', version: latestTag || currentVersion };
+      }
     } catch (err) {
       console.error('アップデート確認エラー:', err);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update-status', {
+          type: 'error',
+          error: err.message
+        });
+      }
       return { status: 'error', message: err.message };
     }
+  }
+
+  ipcMain.handle('check-for-updates', async () => {
+    return await checkAsarUpdate();
   });
 
   ipcMain.handle('start-download-update', async () => {
@@ -294,10 +344,79 @@ if (!gotTheLock) {
       return { success: false, message: '開発環境のためスキップします' };
     }
     try {
-      await autoUpdater.downloadUpdate();
+      const cfg = loadConfig();
+      const repo = cfg.githubRepo || 'shizengakari/CanvasLMS-Horizon';
+      const resp = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+        headers: {
+          'User-Agent': 'CanvasHorizon-App',
+          'Accept': 'application/vnd.github.v3+json'
+        }
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const release = await resp.json();
+      const asarAsset = release.assets?.find(a => a.name === 'app.asar');
+      if (!asarAsset) throw new Error('app.asar が最新リリースに見つかりません');
+
+      const downloadUrl = asarAsset.browser_download_url;
+      const totalBytes = asarAsset.size || 0;
+      const updateDir = path.join(app.getPath('userData'), 'pending-update');
+      if (!fs.existsSync(updateDir)) fs.mkdirSync(updateDir, { recursive: true });
+      const pendingFile = path.join(updateDir, 'app.asar');
+
+      const downloadResp = await fetch(downloadUrl);
+      if (!downloadResp.ok) throw new Error(`ダウンロード失敗: HTTP ${downloadResp.status}`);
+
+      const fileStream = fs.createWriteStream(pendingFile);
+      const reader = downloadResp.body.getReader();
+      let receivedBytes = 0;
+      let lastProgressTime = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        fileStream.write(Buffer.from(value));
+        receivedBytes += value.length;
+
+        const now = Date.now();
+        if (now - lastProgressTime > 150) {
+          lastProgressTime = now;
+          const percent = totalBytes > 0 ? Math.round((receivedBytes / totalBytes) * 100) : 0;
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('update-status', {
+              type: 'progress',
+              percent,
+              transferred: receivedBytes,
+              total: totalBytes
+            });
+          }
+        }
+      }
+      fileStream.end();
+
+      pendingAsarUpdate = {
+        version: release.tag_name,
+        pendingFile,
+        targetAsar: path.join(process.resourcesPath, 'app.asar'),
+        exePath: process.execPath
+      };
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update-status', {
+          type: 'downloaded',
+          version: release.tag_name,
+          releaseNotes: release.body || ''
+        });
+      }
+
       return { success: true };
     } catch (err) {
-      console.error('アップデートダウンロード開始エラー:', err);
+      console.error('アップデートダウンロードエラー:', err);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update-status', {
+          type: 'error',
+          error: err.message
+        });
+      }
       return { success: false, error: err.message };
     }
   });
@@ -312,70 +431,37 @@ if (!gotTheLock) {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.destroy();
     }
-    // NSISインストーラーを実行して安全に更新＆再起動 (Windows UAC対応)
-    autoUpdater.quitAndInstall(false, true);
-    setTimeout(() => {
-      app.exit(0);
-    }, 1000);
-  });
 
-  // 自動アップデート イベントリスナー
-  autoUpdater.on('checking-for-update', () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update-status', { type: 'checking' });
+    if (pendingAsarUpdate && fs.existsSync(pendingAsarUpdate.pendingFile)) {
+      // Windows用ホットパッチ再起動バッチスクリプト
+      const updateDir = path.dirname(pendingAsarUpdate.pendingFile);
+      const batPath = path.join(updateDir, 'apply-update.bat');
+      const batContent = `@echo off
+chcp 65001 >nul
+timeout /t 1 /nobreak >nul
+copy /y "${pendingAsarUpdate.pendingFile}" "${pendingAsarUpdate.targetAsar}" >nul
+start "" "${pendingAsarUpdate.exePath}"
+del "${pendingAsarUpdate.pendingFile}" >nul 2>&1
+(goto) 2>nul & del "%~f0"
+`;
+      try {
+        fs.writeFileSync(batPath, batContent, 'utf8');
+        const child = spawn('cmd.exe', ['/c', batPath], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true
+        });
+        child.unref();
+        setTimeout(() => {
+          app.exit(0);
+        }, 300);
+        return;
+      } catch (e) {
+        console.error('バッチ生成エラー:', e);
+      }
     }
-  });
 
-  autoUpdater.on('update-available', (info) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update-status', {
-        type: 'available',
-        version: info.version,
-        releaseNotes: info.releaseNotes,
-        releaseDate: info.releaseDate
-      });
-    }
-  });
-
-  autoUpdater.on('update-not-available', (info) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update-status', {
-        type: 'not-available',
-        version: info?.version
-      });
-    }
-  });
-
-  autoUpdater.on('download-progress', (progressObj) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update-status', {
-        type: 'progress',
-        percent: Math.round(progressObj.percent),
-        bytesPerSecond: progressObj.bytesPerSecond,
-        transferred: progressObj.transferred,
-        total: progressObj.total
-      });
-    }
-  });
-
-  autoUpdater.on('update-downloaded', (info) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update-status', {
-        type: 'downloaded',
-        version: info.version,
-        releaseNotes: info.releaseNotes
-      });
-    }
-  });
-
-  autoUpdater.on('error', (err) => {
-    console.error('autoUpdater エラー:', err);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update-status', {
-        type: 'error',
-        error: err.message
-      });
-    }
+    app.exit(0);
   });
 
   app.whenReady().then(async () => {

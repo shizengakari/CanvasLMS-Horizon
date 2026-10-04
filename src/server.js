@@ -1210,6 +1210,7 @@ app.get('/api/app/check-update', async (req, res) => {
         const hasUpdate = compareSemver(latestTag, currentVersion) > 0;
         const setupAsset = release.assets?.find(a => a.name && a.name.endsWith('.exe'));
         const zipAsset = release.assets?.find(a => a.name && a.name.endsWith('.zip'));
+        const asarAsset = release.assets?.find(a => a.name === 'app.asar');
 
         return res.json({
           success: true,
@@ -1222,6 +1223,8 @@ app.get('/api/app/check-update', async (req, res) => {
           setupSize: setupAsset?.size || null,
           zipUrl: zipAsset?.browser_download_url || null,
           zipSize: zipAsset?.size || null,
+          asarUrl: asarAsset?.browser_download_url || null,
+          asarSize: asarAsset?.size || null,
           publishedAt: release.published_at,
           checkedAt
         });
