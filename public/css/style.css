@@ -2222,6 +2222,93 @@ a:hover {
   background: var(--bg-input);
 }
 
+/* 未公開・ロック中の講義資料カード */
+.module-file-card.is-locked,
+.module-file-card.is-unpublished {
+  background: rgba(255, 255, 255, 0.02);
+  border-color: rgba(255, 255, 255, 0.08);
+  opacity: 0.88;
+}
+
+[data-theme="light"] .module-file-card.is-locked,
+[data-theme="light"] .module-file-card.is-unpublished {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  opacity: 0.9;
+}
+
+.module-file-card.is-locked:hover,
+.module-file-card.is-unpublished:hover {
+  opacity: 1;
+  background: var(--bg-card-hover);
+  border-color: rgba(245, 158, 11, 0.45);
+}
+
+.module-file-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.item-lock-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  line-height: 1.4;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.item-lock-chip.unpublished {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.item-lock-chip.locked {
+  background: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+}
+
+[data-theme="light"] .item-lock-chip.unpublished {
+  background: #fef3c7;
+  color: #b45309;
+  border-color: #fde68a;
+}
+
+[data-theme="light"] .item-lock-chip.locked {
+  background: #f1f5f9;
+  color: #64748b;
+  border-color: #cbd5e1;
+}
+
+/* モジュールヘッダーの未公開バッジ */
+.module-lock-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  margin-left: 6px;
+}
+
+[data-theme="light"] .module-lock-badge {
+  background: #fef3c7;
+  color: #b45309;
+  border-color: #fde68a;
+}
+
 .module-file-left {
   display: flex;
   align-items: center;
@@ -3034,12 +3121,15 @@ a:hover {
 .submitted-history-box {
   display: flex;
   flex-direction: column;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  padding: 12px 16px;
-  gap: 10px;
+  padding: 14px 18px;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
   flex-shrink: 0;
+  box-shadow: var(--shadow-sm);
 }
 
 .history-header {
@@ -3075,73 +3165,465 @@ a:hover {
   margin-top: 1px;
 }
 
-/* 2列グリッド表示 */
-.history-files-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 8px;
-  max-height: 220px;
-  overflow-y: auto;
-  padding-right: 2px;
-}
-
-.history-file-row {
+/* 提出済みファイル一覧（右半分のスペースをすべて使う横長エクスプローラー詳細表示） */
+/* 提出済みファイル一覧（右半分のスペースをすべて使う横長エクスプローラー詳細表示） */
+.history-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 10px;
+  margin-bottom: 10px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.history-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.history-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* クイック検索フィルター（ファイル数が多い時に即座に絞り込み可能） */
+.explorer-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.explorer-search-icon {
+  position: absolute;
+  left: 10px;
+  pointer-events: none;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+}
+
+.explorer-search-input {
+  padding: 6px 10px 6px 32px;
+  font-size: 13px;
+  font-weight: 500;
   background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  gap: 8px;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  color: #ffffff;
+  outline: none;
+  width: 170px;
   transition: all var(--transition-fast);
-  min-width: 0;
 }
 
-.history-file-row:hover {
-  background: var(--bg-card-hover);
-  border-color: var(--border-medium);
+.explorer-search-input::placeholder {
+  color: #94a3b8;
 }
 
-.history-file-left {
+.explorer-search-input:focus {
+  border-color: #38bdf8;
+  width: 210px;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
+}
+
+/* エクスプローラー風カラムヘッダー (列見出し ＆ 一括チェック) */
+.explorer-table-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-medium);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #94a3b8;
+  letter-spacing: 0.1px;
+  user-select: none;
+  gap: 10px;
+  box-sizing: border-box;
+  width: 100%;
 }
 
-.history-file-checkbox-label {
+[data-theme="light"] .explorer-table-header {
+  background: rgba(0, 0, 0, 0.03);
+  color: #64748b;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.explorer-header-col-select {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex-shrink: 0;
   cursor: pointer;
-  min-width: 0;
-  flex: 1;
+  width: 62px;
 }
 
-.retain-file-checkbox {
+.explorer-header-col-select input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: #38bdf8;
   width: 15px;
   height: 15px;
-  cursor: pointer;
-  accent-color: var(--accent-primary);
-  flex-shrink: 0;
+  margin: 0;
 }
 
-.history-file-name {
-  font-size: 12.5px;
+.header-select-label {
+  font-size: 11.5px;
+  color: #cbd5e1;
   font-weight: 500;
-  color: var(--text-main);
-  white-space: nowrap;
+}
+
+.explorer-header-col-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.explorer-header-col-ext {
+  width: 64px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.explorer-header-col-meta {
+  width: 150px;
+  flex-shrink: 0;
+  text-align: right;
+  padding-right: 4px;
+}
+
+.explorer-header-col-actions {
+  width: 68px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+/* ファイル一覧リスト（スクロール領域・高密度表示対応） */
+.history-files-list {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: 290px;
+  overflow-y: auto;
+  border: 1px solid var(--border-medium);
+  border-top: none;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--bg-card);
+  box-sizing: border-box;
+}
+
+/* 単一行（エクスプローラー詳細表示スリム行） */
+.explorer-file-row {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  background: transparent;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+  min-height: 36px;
+}
+
+[data-theme="light"] .explorer-file-row {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.explorer-file-row:last-child {
+  border-bottom: none;
+}
+
+.explorer-file-row:hover {
+  background: rgba(56, 189, 248, 0.1);
+}
+
+[data-theme="light"] .explorer-file-row:hover {
+  background: rgba(14, 165, 233, 0.08);
+}
+
+.explorer-file-row.is-selected {
+  background: rgba(56, 189, 248, 0.04);
+}
+
+.explorer-col-select {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 18px;
+}
+
+.explorer-col-select input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: #38bdf8;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}
+
+/* 拡張子別アイコン（スリム25px） */
+.explorer-col-icon {
+  width: 25px;
+  height: 25px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+}
+
+.explorer-col-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.explorer-col-icon.ext-pdf {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+.explorer-col-icon.ext-doc {
+  background: rgba(59, 130, 246, 0.18);
+  color: #93c5fd;
+  border-color: rgba(59, 130, 246, 0.3);
+}
+.explorer-col-icon.ext-sheet {
+  background: rgba(16, 185, 129, 0.18);
+  color: #6ee7b7;
+  border-color: rgba(16, 185, 129, 0.3);
+}
+.explorer-col-icon.ext-slide {
+  background: rgba(249, 115, 22, 0.18);
+  color: #fdba74;
+  border-color: rgba(249, 115, 22, 0.3);
+}
+.explorer-col-icon.ext-zip {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fcd34d;
+  border-color: rgba(245, 158, 11, 0.3);
+}
+.explorer-col-icon.ext-image {
+  background: rgba(168, 85, 247, 0.18);
+  color: #d8b4fe;
+  border-color: rgba(168, 85, 247, 0.3);
+}
+.explorer-col-icon.ext-code {
+  background: rgba(6, 182, 212, 0.18);
+  color: #67e8f9;
+  border-color: rgba(6, 182, 212, 0.3);
+}
+.explorer-col-icon.ext-video {
+  background: rgba(236, 72, 153, 0.18);
+  color: #f472b6;
+  border-color: rgba(236, 72, 153, 0.3);
+}
+.explorer-col-icon.ext-audio {
+  background: rgba(14, 165, 233, 0.18);
+  color: #38bdf8;
+  border-color: rgba(14, 165, 233, 0.3);
+}
+.explorer-col-icon.ext-other {
+  background: rgba(148, 163, 184, 0.18);
+  color: #cbd5e1;
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
+/* ファイル名（太字解除・自然で読みやすいレギュラーウェイト） */
+.explorer-file-name {
+  font-size: 13px;
+  font-weight: 400;
+  color: #e2e8f0;
+  line-height: 1.4;
+  letter-spacing: 0.05px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  -webkit-font-smoothing: antialiased;
 }
 
-.history-file-actions {
+[data-theme="light"] .explorer-file-name {
+  color: #1e293b;
+}
+
+/* 専用拡張子カラム (.〇〇) */
+.explorer-col-ext {
+  width: 64px;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.explorer-ext-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  min-width: 44px;
+  max-width: 62px;
+  text-align: center;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.1);
+  color: #e2e8f0;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-sizing: border-box;
+}
+
+[data-theme="light"] .explorer-ext-badge {
+  background: rgba(0, 0, 0, 0.06);
+  color: #334155;
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+.explorer-ext-badge.ext-pdf {
+  background: rgba(239, 68, 68, 0.16);
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.35);
+}
+.explorer-ext-badge.ext-doc {
+  background: rgba(59, 130, 246, 0.16);
+  color: #93c5fd;
+  border-color: rgba(59, 130, 246, 0.35);
+}
+.explorer-ext-badge.ext-sheet {
+  background: rgba(16, 185, 129, 0.16);
+  color: #6ee7b7;
+  border-color: rgba(16, 185, 129, 0.35);
+}
+.explorer-ext-badge.ext-slide {
+  background: rgba(249, 115, 22, 0.16);
+  color: #fdba74;
+  border-color: rgba(249, 115, 22, 0.35);
+}
+.explorer-ext-badge.ext-zip {
+  background: rgba(245, 158, 11, 0.16);
+  color: #fcd34d;
+  border-color: rgba(245, 158, 11, 0.35);
+}
+.explorer-ext-badge.ext-image {
+  background: rgba(168, 85, 247, 0.16);
+  color: #d8b4fe;
+  border-color: rgba(168, 85, 247, 0.35);
+}
+.explorer-ext-badge.ext-code {
+  background: rgba(6, 182, 212, 0.16);
+  color: #67e8f9;
+  border-color: rgba(6, 182, 212, 0.35);
+}
+.explorer-ext-badge.ext-video {
+  background: rgba(236, 72, 153, 0.16);
+  color: #f472b6;
+  border-color: rgba(236, 72, 153, 0.35);
+}
+.explorer-ext-badge.ext-audio {
+  background: rgba(14, 165, 233, 0.16);
+  color: #38bdf8;
+  border-color: rgba(14, 165, 233, 0.35);
+}
+.explorer-ext-badge.ext-other {
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+  border-color: rgba(148, 163, 184, 0.35);
+}
+
+/* メタ情報（サイズ・提出日時） */
+.explorer-col-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: #94a3b8;
+  width: 150px;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  font-family: var(--font-mono);
+  font-weight: 400;
+}
+
+[data-theme="light"] .explorer-col-meta {
+  color: #64748b;
+}
+
+.explorer-meta-size {
+  color: #cbd5e1;
+  font-weight: 400;
+}
+
+[data-theme="light"] .explorer-meta-size {
+  color: #334155;
+}
+
+.explorer-meta-date {
+  color: #94a3b8;
+}
+
+.explorer-meta-divider {
+  opacity: 0.4;
+  color: #64748b;
+}
+
+/* 操作列（プレビュー・保存ミニボタン） */
+.explorer-col-actions {
   display: flex;
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+  width: 68px;
+  justify-content: flex-end;
+}
+
+.explorer-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 27px;
+  padding: 0;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-medium);
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+[data-theme="light"] .explorer-mini-btn {
+  background: rgba(0, 0, 0, 0.04);
+  color: #475569;
+}
+
+.explorer-mini-btn:hover {
+  background: rgba(56, 189, 248, 0.2);
+  border-color: #38bdf8;
+  color: #38bdf8;
+  transform: translateY(-1px);
+}
+
+.explorer-mini-btn.action-save:hover {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: #34d399;
+  color: #34d399;
+}
+
+.explorer-empty-filter {
+  padding: 24px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 /* ==========================================================================
@@ -3964,20 +4446,34 @@ input:checked + .slider:before {
 
 .download-manager-btn {
   position: relative;
-  overflow: hidden;
+  overflow: visible; /* バッジがはみ出しても見切れないようにする */
   transition: all var(--transition-normal);
 }
 
 .download-manager-btn.is-active {
   color: #38bdf8;
   border-color: rgba(56, 189, 248, 0.6);
-  background: rgba(56, 189, 248, 0.12);
+  background: rgba(56, 189, 248, 0.14);
   box-shadow: 0 0 16px rgba(56, 189, 248, 0.35);
   animation: dlBtnPulse 2s ease-in-out infinite;
 }
 
 .download-manager-btn.is-active .dl-icon {
-  animation: dlIconBounce 1.2s ease-in-out infinite;
+  animation: dlIconBounce 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.download-manager-btn.is-completed {
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.7);
+  background: rgba(16, 185, 129, 0.15);
+  box-shadow: 0 0 18px rgba(16, 185, 129, 0.4);
+  animation: dlBtnSuccess 0.8s ease-out;
+}
+
+@keyframes dlBtnSuccess {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); }
 }
 
 @keyframes dlBtnPulse {
@@ -3991,26 +4487,32 @@ input:checked + .slider:before {
 
 @keyframes dlIconBounce {
   0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(3px); }
+  50% { transform: translateY(3.5px); }
 }
 
 .download-count-badge {
   position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 17px;
-  height: 17px;
-  padding: 0 4px;
+  top: -5px;
+  right: -5px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
   border-radius: 999px;
-  background: #f43f5e;
+  background: linear-gradient(135deg, #f43f5e, #e11d48);
   color: #ffffff;
   font-size: 10px;
-  line-height: 17px;
+  line-height: 18px;
   font-weight: 700;
   text-align: center;
-  box-shadow: 0 0 8px rgba(244, 63, 94, 0.6);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 0 8px rgba(244, 63, 94, 0.5);
+  border: 1.5px solid var(--bg-surface);
   pointer-events: none;
-  animation: pulseBadge 2s infinite;
+  z-index: 2;
+  box-sizing: border-box;
+}
+
+.download-count-badge.pulse {
+  animation: pulseBadge 1.8s infinite;
 }
 
 @keyframes pulseBadge {

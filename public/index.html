@@ -488,20 +488,39 @@
             <!-- 提出済みファイル一覧 -->
             <div class="submitted-history-box" id="modal-history-section" style="display: none;">
               <div class="history-header">
-                <div>
+                <div class="history-header-left">
                   <div class="history-title">
                     <svg width="15" height="15" fill="none" stroke="var(--status-submitted)" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                     <span>提出済みファイル</span>
                     <span class="history-count-badge" id="modal-history-count">0件</span>
                   </div>
-                  <div class="history-subtitle">
-                    チェックしたファイルは保持されます
+                  <div class="history-subtitle" id="modal-history-subtitle">
+                    チェックしたファイルは再提出時も保持されます
                   </div>
                 </div>
-                <div style="display: flex; gap: 8px;">
-                  <button class="btn-secondary btn-sm" id="btn-download-submission-zip" title="選択したフォルダに提出ファイルを直接保存します">全件保存</button>
+                <div class="history-header-actions">
+                  <div class="explorer-search-box" id="modal-history-search-box" style="display: none;">
+                    <span class="explorer-search-icon">
+                      <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                    </span>
+                    <input type="text" class="explorer-search-input" id="history-files-search-input" placeholder="ファイル名で検索...">
+                  </div>
+                  <button class="btn-secondary btn-sm" id="btn-download-submission-zip" title="すべての提出ファイルをまとめて保存">全件保存</button>
                 </div>
               </div>
+
+              <!-- エクスプローラー詳細表示テーブルヘッダー -->
+              <div class="explorer-table-header" id="modal-history-table-header">
+                <label class="explorer-header-col-select" title="すべて選択 / 解除">
+                  <input type="checkbox" id="select-all-retain-checkbox" checked>
+                  <span class="header-select-label">全選択</span>
+                </label>
+                <div class="explorer-header-col-name">名前</div>
+                <div class="explorer-header-col-ext">形式</div>
+                <div class="explorer-header-col-meta">サイズ・提出日時</div>
+                <div class="explorer-header-col-actions">操作</div>
+              </div>
+
               <div class="history-files-list" id="modal-history-files-list"></div>
             </div>
 
@@ -781,7 +800,7 @@
   <div class="toast-container" id="toast-container"></div>
 
   <!-- アプリケーションロジック -->
-  <script src="js/app.js?v=1.1.4"></script>
+  <script src="js/app.js?v=1.1.5"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {

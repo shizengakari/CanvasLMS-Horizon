@@ -61,6 +61,7 @@ function getCanvasHost(cfg) {
   }
 }
 const PORT = process.env.PORT || 39281; // 衝突しにくいポート
+let currentPort = PORT;
 
 // メモリ上でファイルを一時保持してCanvasへストリーム転送
 const upload = multer({
@@ -143,6 +144,17 @@ app.get('/api/courses/:courseId/assignments', async (req, res) => {
     const includeOld = req.query.includeOld === 'true';
     const assignments = await canvasService.getAssignments(req.params.courseId, forceRefresh, includeOld);
     res.json({ success: true, assignments });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 3.1 特定課題の最新提出データ取得（添付ファイル・採点・履歴含む）
+app.get('/api/courses/:courseId/assignments/:assignmentId/submission', async (req, res) => {
+  try {
+    const { courseId, assignmentId } = req.params;
+    const submission = await canvasService.getAssignmentSubmission(courseId, assignmentId);
+    res.json({ success: true, submission });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -578,7 +590,23 @@ app.post('/api/files/download-single', async (req, res) => {
     (async () => {
       const cfg = loadConfig();
       const canvasHost = getCanvasHost(cfg);
+      const hostHeader = req.get('host') || (`127.0.0.1:${currentPort || PORT}`);
+      const localOrigin = `${req.protocol || 'http'}://${hostHeader}`;
       let downloadUrl = url || null;
+
+      // 相対URL（自前プロキシ /api/files/download など）を完全なURLに変換
+      if (downloadUrl && downloadUrl.startsWith('/')) {
+        try {
+          const parsedLocal = new URL(downloadUrl, localOrigin);
+          // ダウンロード用に inline=true は除去
+          if (parsedLocal.searchParams.get('inline') === 'true') {
+            parsedLocal.searchParams.delete('inline');
+          }
+          downloadUrl = parsedLocal.toString();
+        } catch (e) {
+          downloadUrl = `${localOrigin}${downloadUrl}`;
+        }
+      }
 
       if (downloadUrl && downloadUrl.includes('/api/v1/')) {
         try {
@@ -605,6 +633,7 @@ app.post('/api/files/download-single', async (req, res) => {
       try { urlHost = new URL(downloadUrl).host; } catch (e) {}
 
       const headers = {};
+      // 自サーバープロキシ宛て（ローカル）の場合はCanvas認証ヘッダーは不要（プロキシ内部で付与）
       if (urlHost && urlHost === canvasHost) {
         headers['Authorization'] = `Bearer ${cfg.apiToken}`;
       }
@@ -737,7 +766,21 @@ app.post('/api/files/download-batch', async (req, res) => {
         job.message = `${i + 1}/${files.length} 件目を保存中: ${safeFileName}`;
 
         try {
+          const hostHeader = req.get('host') || (`127.0.0.1:${currentPort || PORT}`);
+          const localOrigin = `${req.protocol || 'http'}://${hostHeader}`;
           let downloadUrl = item.url || null;
+
+          if (downloadUrl && downloadUrl.startsWith('/')) {
+            try {
+              const parsedLocal = new URL(downloadUrl, localOrigin);
+              if (parsedLocal.searchParams.get('inline') === 'true') {
+                parsedLocal.searchParams.delete('inline');
+              }
+              downloadUrl = parsedLocal.toString();
+            } catch (e) {
+              downloadUrl = `${localOrigin}${downloadUrl}`;
+            }
+          }
 
           // item.url が Canvas の内部APIエンドポイントの場合、詳細JSONから直接URLを取り出す
           if (downloadUrl && downloadUrl.includes('/api/v1/')) {
@@ -1228,7 +1271,8 @@ app.get('/api/app/check-update', async (req, res) => {
 function startServer(port = PORT) {
   return new Promise((resolve, reject) => {
     const server = app.listen(port, () => {
-      console.log(`Canvas Horizon API Server running at http://localhost:${port}`);
+      currentPort = server.address().port;
+      console.log(`Canvas Horizon API Server running at http://localhost:${currentPort}`);
       resolve(server);
     }).on('error', err => {
       if (err.code === 'EADDRINUSE') {

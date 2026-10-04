@@ -390,32 +390,44 @@ const downloadManager = {
   updateState() {
     const activeJobs = this.jobs.filter(j => j.status === 'downloading');
     const hasActive = activeJobs.length > 0;
+    const completedJobs = this.jobs.filter(j => j.status === 'completed');
 
     // Electronにダウンロード中フラグを送信（アプリ終了時の警告確認用）
     if (window.desktopAPI && typeof window.desktopAPI.setDownloadsActive === 'function') {
       window.desktopAPI.setDownloadsActive(hasActive);
     }
 
-    // バッジ更新
+    // バッジ更新（見切れ防止・数字バッジまたはアクティブインジケータ）
     if (this.badge) {
       if (hasActive) {
         this.badge.hidden = false;
         this.badge.textContent = activeJobs.length;
+        this.badge.classList.add('pulse');
       } else {
         this.badge.hidden = true;
+        this.badge.classList.remove('pulse');
       }
     }
 
     // ボタンのスタイルとインライン進捗バー更新
     if (this.btn) {
       this.btn.classList.toggle('is-active', hasActive);
+
+      // ダウンロード完了時の成功フィードバック演出
+      if (!hasActive && this._wasActive && completedJobs.length > 0) {
+        this.btn.classList.add('is-completed');
+        setTimeout(() => {
+          if (this.btn) this.btn.classList.remove('is-completed');
+        }, 2500);
+      }
+      this._wasActive = hasActive;
     }
 
     if (this.btnProgressBar) {
       if (hasActive) {
         const totalProgress = activeJobs.reduce((acc, j) => acc + (j.progress || 0), 0);
         const avgProgress = Math.round(totalProgress / activeJobs.length);
-        this.btnProgressBar.style.width = `${Math.max(6, avgProgress)}%`;
+        this.btnProgressBar.style.width = `${Math.max(8, avgProgress)}%`;
         this.btnProgressBar.style.display = 'block';
       } else {
         this.btnProgressBar.style.width = '0%';
@@ -2149,6 +2161,269 @@ function switchSubmissionTab(tabKey) {
   if (url) url.style.display = tabKey === 'url' ? 'block' : 'none';
 }
 
+// 課題ステータスバッジの更新
+function updateAssignmentModalStatusBadge(assignment) {
+  const statusEl = document.getElementById('modal-status-badge');
+  if (!statusEl) return;
+  if (assignment.isGraded) {
+    statusEl.innerHTML = `<span class="badge badge-submitted">採点済み (${assignment.submission.grade || assignment.submission.score}点)</span>`;
+  } else if (assignment.isSubmitted) {
+    const subDate = assignment.submission?.submittedAt ? utils.formatDate(assignment.submission.submittedAt) : '提出済み';
+    statusEl.innerHTML = `<span class="badge badge-submitted">提出済み (${subDate})</span>`;
+  } else if (assignment.isLocked) {
+    statusEl.innerHTML = `<span class="badge badge-locked">ロック中</span>`;
+  } else {
+    statusEl.innerHTML = `<span class="badge badge-pending">未提出</span>`;
+  }
+}
+
+// エクスプローラー風の提出済みファイル一覧描画（横長詳細表示・高密度スリム行・全選択・クイック検索対応）
+function renderAssignmentSubmissionHistory(submission, assignment) {
+  const historySec = document.getElementById('modal-history-section');
+  const historyGrid = document.getElementById('modal-history-files-list');
+  const selectAllCb = document.getElementById('select-all-retain-checkbox');
+  const searchBox = document.getElementById('modal-history-search-box');
+  const searchInput = document.getElementById('history-files-search-input');
+  const subtitleEl = document.getElementById('modal-history-subtitle');
+  if (!historySec || !historyGrid) return;
+
+  const attachments = submission?.attachments || [];
+  if (attachments.length === 0) {
+    historySec.style.display = 'none';
+    return;
+  }
+
+  historySec.style.display = 'block';
+  const countBadge = document.getElementById('modal-history-count');
+  if (countBadge) countBadge.textContent = `${attachments.length}件`;
+
+  // 5件以上の場合に検索ボックスを表示
+  if (searchBox) {
+    searchBox.style.display = attachments.length >= 5 ? 'flex' : 'none';
+    if (searchInput) {
+      searchInput.value = '';
+    }
+  }
+
+  // 全選択チェックボックスの更新関数
+  function updateSelectionState() {
+    const allCheckboxes = historyGrid.querySelectorAll('.retain-file-checkbox');
+    const checkedCount = historyGrid.querySelectorAll('.retain-file-checkbox:checked').length;
+    
+    if (selectAllCb) {
+      if (checkedCount === 0) {
+        selectAllCb.checked = false;
+        selectAllCb.indeterminate = false;
+      } else if (checkedCount === allCheckboxes.length) {
+        selectAllCb.checked = true;
+        selectAllCb.indeterminate = false;
+      } else {
+        selectAllCb.checked = false;
+        selectAllCb.indeterminate = true;
+      }
+    }
+
+    if (subtitleEl) {
+      if (checkedCount === allCheckboxes.length) {
+        subtitleEl.textContent = `全${attachments.length}件のファイルを再提出時もすべて保持します`;
+      } else if (checkedCount === 0) {
+        subtitleEl.textContent = '保持するファイルはありません（新しいファイルのみ提出されます）';
+      } else {
+        subtitleEl.textContent = `${attachments.length}件中 ${checkedCount}件のファイルを保持します`;
+      }
+    }
+  }
+
+  if (selectAllCb) {
+    selectAllCb.checked = true;
+    selectAllCb.indeterminate = false;
+    selectAllCb.onchange = () => {
+      const isChecked = selectAllCb.checked;
+      historyGrid.querySelectorAll('.retain-file-checkbox').forEach(cb => {
+        cb.checked = isChecked;
+        const row = cb.closest('.explorer-file-row');
+        if (row) {
+          row.classList.toggle('is-selected', isChecked);
+        }
+      });
+      updateSelectionState();
+      renderFileQueue();
+    };
+  }
+
+  historyGrid.innerHTML = '';
+  attachments.forEach(att => {
+    const fileName = att.displayName || att.filename || 'file';
+    const rawExt = utils.getFileExt(fileName);
+    const hasDot = fileName.lastIndexOf('.') > 0;
+    const ext = hasDot ? rawExt.toUpperCase() : '';
+    const extDisplay = hasDot ? `.${rawExt.toLowerCase()}` : 'FILE';
+
+    const isPdf = ext === 'PDF';
+    const isDoc = ['DOC', 'DOCX', 'TXT', 'MD', 'RTF', 'ODT', 'PAGES', 'TEX'].includes(ext);
+    const isSheet = ['XLS', 'XLSX', 'CSV', 'TSV', 'ODS', 'NUMBERS'].includes(ext);
+    const isSlide = ['PPT', 'PPTX', 'KEY', 'ODP'].includes(ext);
+    const isZip = ['ZIP', 'TAR', 'GZ', '7Z', 'RAR', 'BZ2', 'XZ', 'TGZ'].includes(ext);
+    const isImage = ['PNG', 'JPG', 'JPEG', 'GIF', 'WEBP', 'SVG', 'BMP', 'ICO', 'TIFF', 'PSD', 'AI', 'EPS'].includes(ext);
+    const isVideo = ['MP4', 'MOV', 'AVI', 'MKV', 'WEBM', 'FLV', 'WMV', 'M4V'].includes(ext);
+    const isAudio = ['MP3', 'WAV', 'FLAC', 'AAC', 'OGG', 'M4A', 'WMA'].includes(ext);
+    const isCode = [
+      'JAVA', 'CLASS', 'JAR', 'PY', 'PYW', 'IPYNB', 'JS', 'JSX', 'MJS', 'CJS',
+      'TS', 'TSX', 'HTML', 'HTM', 'CSS', 'SCSS', 'SASS', 'LESS',
+      'C', 'CPP', 'CC', 'CXX', 'H', 'HPP', 'CS', 'GO', 'RS', 'RB', 'PHP',
+      'SH', 'BASH', 'ZSH', 'BAT', 'CMD', 'PS1', 'SQL', 'JSON', 'XML',
+      'YAML', 'YML', 'TOML', 'INI', 'CONF', 'R', 'KT', 'KTS', 'SWIFT',
+      'DART', 'SCALA', 'LUA', 'ASM', 'V', 'SV', 'VHD', 'VHDL'
+    ].includes(ext);
+
+    let extClass = 'ext-other';
+    let iconSvg = '';
+
+    if (isPdf) {
+      extClass = 'ext-pdf';
+      iconSvg = `<svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>`;
+    } else if (isDoc) {
+      extClass = 'ext-doc';
+      iconSvg = `<svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>`;
+    } else if (isSheet) {
+      extClass = 'ext-sheet';
+      iconSvg = `<svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 4h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>`;
+    } else if (isSlide) {
+      extClass = 'ext-slide';
+      iconSvg = `<svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/></svg>`;
+    } else if (isZip) {
+      extClass = 'ext-zip';
+      iconSvg = `<svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>`;
+    } else if (isImage) {
+      extClass = 'ext-image';
+      iconSvg = `<svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>`;
+    } else if (isVideo) {
+      extClass = 'ext-video';
+      iconSvg = `<svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>`;
+    } else if (isAudio) {
+      extClass = 'ext-audio';
+      iconSvg = `<svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/></svg>`;
+    } else if (isCode) {
+      extClass = 'ext-code';
+      iconSvg = `<svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>`;
+    } else {
+      extClass = 'ext-other';
+      iconSvg = `<svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>`;
+    }
+
+    const extDisplay = ext ? `.${ext.toLowerCase()}` : '';
+    const sizeText = att.size ? utils.formatBytes(att.size) : '';
+    const dateText = att.createdAt ? utils.formatDate(att.createdAt) : (submission?.submittedAt ? utils.formatDate(submission.submittedAt) : '');
+    const directDlUrl = `/api/files/download?id=${att.id || ''}&url=${encodeURIComponent(att.url || '')}&name=${encodeURIComponent(fileName)}`;
+
+    const row = document.createElement('div');
+    row.className = 'explorer-file-row is-selected';
+    row.dataset.fileName = fileName.toLowerCase();
+    row.innerHTML = `
+      <div class="explorer-col-select" title="チェックしたファイルは再提出時も保持されます">
+        <input type="checkbox" class="retain-file-checkbox" data-file-id="${att.id}" checked>
+      </div>
+      <div class="explorer-col-icon ${extClass}">
+        ${iconSvg}
+      </div>
+      <div class="explorer-file-name" title="${utils.escapeHtml(fileName)}">
+        ${utils.escapeHtml(fileName)}
+      </div>
+      <div class="explorer-col-ext" title="形式: ${extDisplay}">
+        <span class="explorer-ext-badge ${extClass}">${extDisplay || '-'}</span>
+      </div>
+      <div class="explorer-col-meta">
+        ${sizeText ? `<span class="explorer-meta-size">${sizeText}</span>` : ''}
+        ${(sizeText && dateText) ? `<span class="explorer-meta-divider">•</span>` : ''}
+        ${dateText ? `<span class="explorer-meta-date" title="提出日時">${dateText}</span>` : ''}
+      </div>
+      <div class="explorer-col-actions">
+        ${(isPdf || isImage) ? `
+          <button type="button" class="explorer-mini-btn preview-file-btn" title="ファイル内容をプレビュー">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+          </button>
+        ` : ''}
+        <button type="button" class="explorer-mini-btn action-save btn-explorer-save" title="ファイルを個別保存">
+          <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+        </button>
+      </div>
+    `;
+
+    // プレビューボタン
+    const prevBtn = row.querySelector('.preview-file-btn');
+    if (prevBtn) {
+      prevBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openPdfPreviewModal(directDlUrl, fileName, att.id, assignment?.courseId);
+      });
+    }
+
+    // 個別保存ボタン
+    const saveBtn = row.querySelector('.btn-explorer-save');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        downloadSingleFile({
+          id: att.id,
+          url: directDlUrl,
+          name: fileName,
+          courseId: assignment?.courseId || state.materialsCourseId
+        });
+      });
+    }
+
+    const cb = row.querySelector('.retain-file-checkbox');
+    cb.addEventListener('change', () => {
+      row.classList.toggle('is-selected', cb.checked);
+      updateSelectionState();
+      renderFileQueue();
+    });
+
+    historyGrid.appendChild(row);
+  });
+
+  updateSelectionState();
+
+  // リアルタイム検索フィルターのバインド
+  if (searchInput) {
+    searchInput.oninput = () => {
+      const q = searchInput.value.trim().toLowerCase();
+      const rows = historyGrid.querySelectorAll('.explorer-file-row');
+      let visibleCount = 0;
+      rows.forEach(r => {
+        const fn = r.dataset.fileName || '';
+        const match = !q || fn.includes(q);
+        r.style.display = match ? 'flex' : 'none';
+        if (match) visibleCount++;
+      });
+
+      let emptyMsg = historyGrid.querySelector('.explorer-empty-filter');
+      if (visibleCount === 0 && q) {
+        if (!emptyMsg) {
+          emptyMsg = document.createElement('div');
+          emptyMsg.className = 'explorer-empty-filter';
+          emptyMsg.textContent = `「${searchInput.value}」に一致する提出ファイルは見つかりませんでした`;
+          historyGrid.appendChild(emptyMsg);
+        }
+      } else if (emptyMsg) {
+        emptyMsg.remove();
+      }
+    };
+  }
+
+  const zipBtn = document.getElementById('btn-download-submission-zip');
+  if (zipBtn) {
+    zipBtn.textContent = attachments.length > 1 ? `全${attachments.length}件を一括保存` : '全件保存';
+    zipBtn.onclick = () => {
+      downloadFilesToFolder(attachments.map(att => ({
+        url: att.url,
+        id: att.id,
+        name: att.displayName || att.filename
+      })), `${assignment.name} 提出ファイル`, `${assignment.name}_提出ファイル`);
+    };
+  }
+}
+
 function openAssignmentModal(assignment) {
   state.currentModalAssignment = assignment;
   state.filesQueue = [];
@@ -2158,16 +2433,7 @@ function openAssignmentModal(assignment) {
   document.getElementById('modal-due-date').textContent = utils.formatDate(assignment.dueAt);
   document.getElementById('modal-points').textContent = assignment.pointsPossible ? `${assignment.pointsPossible} 点` : 'なし';
 
-  const statusEl = document.getElementById('modal-status-badge');
-  if (assignment.isGraded) {
-    statusEl.innerHTML = `<span class="badge badge-submitted">採点済み (${assignment.submission.grade || assignment.submission.score}点)</span>`;
-  } else if (assignment.isSubmitted) {
-    statusEl.innerHTML = `<span class="badge badge-submitted">提出済み (${utils.formatDate(assignment.submission.submittedAt)})</span>`;
-  } else if (assignment.isLocked) {
-    statusEl.innerHTML = `<span class="badge badge-locked">ロック中</span>`;
-  } else {
-    statusEl.innerHTML = `<span class="badge badge-pending">未提出</span>`;
-  }
+  updateAssignmentModalStatusBadge(assignment);
 
   const types = assignment.submissionTypes || [];
   const readableTypes = [];
@@ -2239,58 +2505,38 @@ function openAssignmentModal(assignment) {
     document.getElementById('tab-content-url').style.display = 'none';
   }
 
-  // 過去の提出済みファイル一覧（保持・マージ提出対応）
-  const historySec = document.getElementById('modal-history-section');
-  const historyGrid = document.getElementById('modal-history-files-list');
-  historyGrid.innerHTML = '';
+  // 過去の提出済みファイル一覧の初回レンダリング（エクスプローラー風詳細行）
+  renderAssignmentSubmissionHistory(assignment.submission, assignment);
 
-  if (assignment.submission && assignment.submission.attachments && assignment.submission.attachments.length > 0) {
-    historySec.style.display = 'flex';
-    document.getElementById('modal-history-count').textContent = `${assignment.submission.attachments.length}件`;
+  // 【最重要】提出されたファイル・ステータスは常に最新の状態のものをCanvasからバックグラウンド即座取得
+  const targetCourseId = assignment.courseId || state.materialsCourseId;
+  const targetAssignmentId = assignment.id || assignment.assignmentId;
+  if (targetCourseId && targetAssignmentId) {
+    api.get(`/api/courses/${targetCourseId}/assignments/${targetAssignmentId}/submission`)
+      .then(res => {
+        if (res && res.success && res.submission && state.currentModalAssignment?.id === assignment.id) {
+          state.currentModalAssignment.submission = res.submission;
+          state.currentModalAssignment.isSubmitted = Boolean(res.submission.isSubmitted);
+          state.currentModalAssignment.isGraded = Boolean(res.submission.isGraded);
+          
+          updateAssignmentModalStatusBadge(state.currentModalAssignment);
+          renderAssignmentSubmissionHistory(res.submission, state.currentModalAssignment);
 
-    assignment.submission.attachments.forEach(att => {
-      const item = document.createElement('div');
-      item.className = 'history-file-row';
-      item.innerHTML = `
-        <div class="history-file-left">
-          <label class="history-file-checkbox-label" title="チェックしたファイルは再提出時も保持されます">
-            <input type="checkbox" class="retain-file-checkbox" data-file-id="${att.id}" checked>
-            <span class="file-icon-badge">${utils.getFileExt(att.displayName)}</span>
-            <span class="history-file-name" title="${att.displayName}">${att.displayName}</span>
-          </label>
-        </div>
-        <div class="history-file-actions">
-          <button class="action-chip-btn preview-file-btn" title="ファイル内容をプレビュー">
-            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-            <span>プレビュー</span>
-          </button>
-          <a class="action-chip-btn" href="/api/files/download?url=${encodeURIComponent(att.url)}&name=${encodeURIComponent(att.displayName)}" download="${att.displayName}" title="ファイルをローカル保存">
-            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-            <span>保存</span>
-          </a>
-        </div>
-      `;
-
-      item.querySelector('.preview-file-btn').addEventListener('click', (e) => {
-        e.stopPropagation();
-        openPdfPreviewModal(att.url, att.displayName);
+          // テキスト記述の復元
+          if (res.submission.body) {
+            const rawText = utils.stripHtml(res.submission.body);
+            const textEditor = document.getElementById('modal-text-entry-body');
+            if (textEditor && !textEditor.value) {
+              textEditor.value = rawText;
+              const charCountBadge = document.getElementById('modal-text-char-count');
+              if (charCountBadge) charCountBadge.textContent = `${rawText.length.toLocaleString()} 文字`;
+            }
+          }
+        }
+      })
+      .catch(err => {
+        console.warn('Could not fetch fresh submission:', err.message);
       });
-
-      item.querySelector('.retain-file-checkbox').addEventListener('change', () => {
-        renderFileQueue();
-      });
-
-      historyGrid.appendChild(item);
-    });
-
-    document.getElementById('btn-download-submission-zip').onclick = () => {
-      downloadFilesToFolder(assignment.submission.attachments.map(att => ({
-        url: att.url,
-        name: att.displayName
-      })), `${assignment.name} 提出ファイル`, `${assignment.name}_提出ファイル`);
-    };
-  } else {
-    historySec.style.display = 'none';
   }
 
   // 入力欄のリセットおよび過去のテキスト提出内容の復元
@@ -3002,6 +3248,12 @@ function renderGroupedMaterials(modules) {
           <svg class="module-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/></svg>
           <span>${m.name}</span>
           <span class="module-items-badge">${m.items.length}件</span>
+          ${(m.isLocked || m.published === false) ? `
+            <span class="module-lock-badge" title="このモジュールはCanvas上で非公開またはロックに設定されています">
+              <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+              <span>${m.unlockAt && new Date(m.unlockAt) > new Date() ? `${utils.formatDate(m.unlockAt)} 公開` : (m.published === false ? '未公開' : 'ロック')}</span>
+            </span>
+          ` : ''}
         </div>
         ${totalSavable > 0 ? `
           <button class="action-chip-btn btn-zip-module" style="font-weight: 700; color: #38bdf8; border-color: rgba(56, 189, 248, 0.35);" title="この回のファイル・動画をすべて保存します">
@@ -3062,8 +3314,11 @@ function renderGroupedMaterials(modules) {
       const title = it.displayName || it.title;
       const directDownloadUrl = it.id ? `/api/files/download?id=${it.id}&name=${encodeURIComponent(title)}` : null;
 
+      const isItemLocked = Boolean(it.isLocked || it.lockedForUser || it.published === false || (it.unlockAt && new Date(it.unlockAt) > new Date()));
+      const isItemUnpublished = Boolean((it.published === false) || (it.workflowState === 'unpublished') || (m.published === false));
+
       const card = document.createElement('div');
-      card.className = 'module-file-card';
+      card.className = `module-file-card${isItemLocked ? ' is-locked' : ''}${isItemUnpublished ? ' is-unpublished' : ''}`;
 
       const extUrl = it.externalUrl || it.url || it.htmlUrl;
       const ytId = isExternal ? utils.extractYouTubeVideoId(extUrl) : null;
@@ -3206,13 +3461,23 @@ function renderGroupedMaterials(modules) {
         `;
       }
 
+      const lockBadgeHtml = (isItemLocked || isItemUnpublished) ? `
+        <span class="item-lock-chip ${isItemUnpublished ? 'unpublished' : 'locked'}" title="未公開の講義資料です（クリックでプレビュー・保存を試行します）">
+          <svg width="10" height="10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+          <span>${it.unlockAt && new Date(it.unlockAt) > new Date() ? `${utils.formatDate(it.unlockAt)} 公開` : (isItemUnpublished ? '未公開' : 'ロック')}</span>
+        </span>
+      ` : '';
+
       card.innerHTML = `
         <div class="module-file-left">
           <div class="module-file-icon ${iconClass}">
             ${iconHtml}
           </div>
           <div class="module-file-info">
-            <span class="module-file-title" title="${title}">${title}</span>
+            <div class="module-file-title-wrap">
+              <span class="module-file-title" title="${title}">${title}</span>
+              ${lockBadgeHtml}
+            </div>
             <div class="module-file-meta">
               ${metaHtml}
             </div>
@@ -3763,12 +4028,13 @@ function setupContentLinks(container, defaultCourseId = null) {
 
       const saveBtn = videoCard.querySelector('.btn-save-embedded-video');
       if (saveBtn) {
+        const fileDownloadUrl = new URL(`/api/files/download?id=${attachmentId}&verifier=${encodeURIComponent(verifier)}&courseId=${defaultCourseId || ''}&name=${encodeURIComponent(cleanTitle)}`, window.location.origin).toString();
         saveBtn.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();
           downloadSingleFile({
             id: attachmentId,
-            url: streamUrl,
+            url: fileDownloadUrl,
             name: cleanTitle,
             courseId: defaultCourseId
           });

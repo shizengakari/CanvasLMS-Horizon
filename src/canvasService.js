@@ -611,21 +611,50 @@ class CanvasService {
       modules = [];
     }
 
-    const formatted = (Array.isArray(modules) ? modules : []).map(m => ({
-      id: m.id,
-      name: m.name,
-      position: m.position,
-      itemsCount: m.items_count,
-      items: (m.items || []).map(it => ({
-        id: it.id,
-        title: it.title,
-        type: it.type, // 'File', 'Assignment', 'Page', 'ExternalUrl', 'Quiz' など
-        contentId: it.content_id,
-        htmlUrl: it.html_url,
-        url: it.url, // ファイル解決用API URL
-        externalUrl: it.external_url || null
-      }))
-    }));
+    const formatted = (Array.isArray(modules) ? modules : []).map(m => {
+      const isModuleLocked = Boolean(m.locked_for_user || m.state === 'locked' || (m.unlock_at && new Date(m.unlock_at) > new Date()));
+      const isModulePublished = m.published !== false && m.workflow_state !== 'unpublished';
+
+      return {
+        id: m.id,
+        name: m.name,
+        position: m.position,
+        itemsCount: m.items_count,
+        published: isModulePublished,
+        workflowState: m.workflow_state || null,
+        state: m.state || (isModuleLocked ? 'locked' : 'unlocked'),
+        unlockAt: m.unlock_at || null,
+        isLocked: isModuleLocked,
+        items: (m.items || []).map(it => {
+          const itemUnlockAt = it.unlock_at || it.lock_info?.unlock_at || null;
+          const isItemLocked = Boolean(
+            it.locked_for_user ||
+            it.workflow_state === 'unpublished' ||
+            it.published === false ||
+            isModuleLocked ||
+            (itemUnlockAt && new Date(itemUnlockAt) > new Date())
+          );
+          const isItemPublished = it.published !== false && it.workflow_state !== 'unpublished' && isModulePublished;
+
+          return {
+            id: it.id,
+            title: it.title,
+            type: it.type, // 'File', 'Assignment', 'Page', 'ExternalUrl', 'Quiz' など
+            contentId: it.content_id,
+            htmlUrl: it.html_url,
+            url: it.url, // ファイル解決用API URL
+            externalUrl: it.external_url || null,
+            published: isItemPublished,
+            workflowState: it.workflow_state || null,
+            lockedForUser: Boolean(it.locked_for_user),
+            isLocked: isItemLocked,
+            lockInfo: it.lock_info || null,
+            unlockAt: itemUnlockAt,
+            lockExplanation: it.lock_info?.lock_explanation || null
+          };
+        })
+      };
+    });
 
     this.setLru(this.cache.modules, cacheKey, { time: now, data: formatted });
     return formatted;
@@ -752,6 +781,15 @@ class CanvasService {
     modules.forEach(m => {
       const moduleFiles = [];
       (m.items || []).forEach(it => {
+        const commonProps = {
+          published: it.published,
+          isLocked: it.isLocked,
+          lockedForUser: it.lockedForUser,
+          unlockAt: it.unlockAt,
+          lockExplanation: it.lockExplanation,
+          workflowState: it.workflowState
+        };
+
         if (it.type === 'File') {
           const resolved = fileMapById.get(String(it.contentId)) || {};
           moduleFiles.push({
@@ -763,7 +801,8 @@ class CanvasService {
             contentType: resolved.contentType || (it.title.endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream'),
             url: resolved.url || null,
             type: 'File',
-            htmlUrl: it.htmlUrl
+            htmlUrl: it.htmlUrl,
+            ...commonProps
           });
         } else if (it.type === 'Page') {
           moduleFiles.push({
@@ -773,7 +812,8 @@ class CanvasService {
             type: 'Page',
             pageUrl: it.page_url || (it.url ? it.url.split('/').pop() : null),
             apiUrl: it.url,
-            htmlUrl: it.htmlUrl
+            htmlUrl: it.htmlUrl,
+            ...commonProps
           });
         } else if (it.type === 'Assignment') {
           const assign = assignMapById.get(String(it.contentId)) || 
@@ -791,7 +831,9 @@ class CanvasService {
             dueAt: assign?.dueAt || null,
             pointsPossible: assign?.pointsPossible ?? null,
             submission: assign?.submission || null,
-            submissionTypes: assign?.submissionTypes || ['online_upload']
+            submissionTypes: assign?.submissionTypes || ['online_upload'],
+            ...commonProps,
+            isLocked: Boolean(it.isLocked || assign?.isLocked)
           });
         } else if (it.type === 'ExternalUrl') {
           moduleFiles.push({
@@ -800,7 +842,8 @@ class CanvasService {
             title: it.title,
             type: 'ExternalUrl',
             url: it.externalUrl, // 外部直接URL（YouTube動画など）
-            htmlUrl: it.htmlUrl
+            htmlUrl: it.htmlUrl,
+            ...commonProps
           });
         } else {
           moduleFiles.push({
@@ -809,7 +852,8 @@ class CanvasService {
             title: it.title,
             type: it.type,
             url: it.externalUrl || it.url,
-            htmlUrl: it.htmlUrl
+            htmlUrl: it.htmlUrl,
+            ...commonProps
           });
         }
       });
@@ -819,6 +863,10 @@ class CanvasService {
           id: m.id,
           name: m.name,
           position: m.position,
+          published: m.published,
+          isLocked: m.isLocked,
+          unlockAt: m.unlockAt,
+          workflowState: m.workflowState,
           items: moduleFiles
         });
       }
@@ -1070,6 +1118,75 @@ class CanvasService {
 
     this.cache.assignments.delete(String(courseId));
     return await res.json();
+  }
+
+  // 課題の最新の提出情報（添付ファイル・履歴含む）をCanvasからダイレクト取得
+  async getAssignmentSubmission(courseId, assignmentId) {
+    try {
+      const sub = await this.fetchJson(
+        `/api/v1/courses/${courseId}/assignments/${assignmentId}/submissions/self?include[]=submission_history&include[]=submission_comments&include[]=rubric_assessment`
+      );
+      if (!sub || sub.errors) return null;
+
+      // 最新の attempt の attachments を最優先で取得
+      let attachments = Array.isArray(sub.attachments) ? sub.attachments : [];
+      if (Array.isArray(sub.submission_history) && sub.submission_history.length > 0) {
+        // attempt番号が最大の履歴を探す
+        const sortedHist = [...sub.submission_history].sort((a, b) => (b.attempt || 0) - (a.attempt || 0));
+        const latestHist = sortedHist[0];
+        if (Array.isArray(latestHist?.attachments) && latestHist.attachments.length > 0) {
+          // 重複IDを排除しつつマージまたは最新を優先
+          const seenIds = new Set();
+          const merged = [];
+          latestHist.attachments.forEach(att => {
+            seenIds.add(String(att.id));
+            merged.push(att);
+          });
+          attachments.forEach(att => {
+            if (!seenIds.has(String(att.id))) {
+              merged.push(att);
+            }
+          });
+          attachments = merged;
+        }
+      }
+
+      return {
+        id: sub.id,
+        assignmentId: sub.assignment_id || assignmentId,
+        userId: sub.user_id,
+        submittedAt: sub.submitted_at,
+        score: sub.score,
+        grade: sub.grade,
+        workflowState: sub.workflow_state,
+        attempt: sub.attempt,
+        body: sub.body,
+        url: sub.url,
+        submissionType: sub.submission_type,
+        late: Boolean(sub.late),
+        missing: Boolean(sub.missing),
+        isSubmitted: sub.workflow_state === 'submitted' || sub.workflow_state === 'graded',
+        isGraded: sub.workflow_state === 'graded',
+        attachments: (attachments || []).map(att => ({
+          id: att.id,
+          displayName: att.display_name || att.filename,
+          filename: att.filename,
+          size: att.size || 0,
+          contentType: att['content-type'] || att.content_type,
+          url: att.url,
+          createdAt: att.created_at
+        })),
+        submissionComments: (sub.submission_comments || []).map(sc => ({
+          id: sc.id,
+          authorName: sc.author_name,
+          comment: sc.comment,
+          createdAt: sc.created_at
+        }))
+      };
+    } catch (err) {
+      console.warn(`Could not get latest submission for assignment ${assignmentId} in course ${courseId}:`, err.message);
+      return null;
+    }
   }
 
   // 複数ファイルをZIPアーカイブにまとめてストリーミング
