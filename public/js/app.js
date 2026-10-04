@@ -3247,12 +3247,6 @@ function renderGroupedMaterials(modules) {
           <svg class="module-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/></svg>
           <span>${m.name}</span>
           <span class="module-items-badge">${m.items.length}件</span>
-          ${(m.isLocked || m.published === false) ? `
-            <span class="module-lock-badge" title="このモジュールはCanvas上で非公開またはロックに設定されています">
-              <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
-              <span>${m.unlockAt && new Date(m.unlockAt) > new Date() ? `${utils.formatDate(m.unlockAt)} 公開` : (m.published === false ? '未公開' : 'ロック')}</span>
-            </span>
-          ` : ''}
         </div>
         ${totalSavable > 0 ? `
           <button class="action-chip-btn btn-zip-module" style="font-weight: 700; color: #38bdf8; border-color: rgba(56, 189, 248, 0.35);" title="この回のファイル・動画をすべて保存します">
@@ -3313,11 +3307,8 @@ function renderGroupedMaterials(modules) {
       const title = it.displayName || it.title;
       const directDownloadUrl = it.id ? `/api/files/download?id=${it.id}&name=${encodeURIComponent(title)}` : null;
 
-      const isItemLocked = Boolean(it.isLocked || it.lockedForUser || it.published === false || (it.unlockAt && new Date(it.unlockAt) > new Date()));
-      const isItemUnpublished = Boolean((it.published === false) || (it.workflowState === 'unpublished') || (m.published === false));
-
       const card = document.createElement('div');
-      card.className = `module-file-card${isItemLocked ? ' is-locked' : ''}${isItemUnpublished ? ' is-unpublished' : ''}`;
+      card.className = 'module-file-card';
 
       const extUrl = it.externalUrl || it.url || it.htmlUrl;
       const ytId = isExternal ? utils.extractYouTubeVideoId(extUrl) : null;
@@ -3378,7 +3369,6 @@ function renderGroupedMaterials(modules) {
         const dueText = dueAt ? utils.formatDate(dueAt) : null;
 
         if (isAssignmentSubmitted) {
-          // ステータスタグの表示判定
           const parts = [];
           if (dueText) parts.push(`締切: ${dueText}`);
           if (pointsText) parts.push(pointsText);
@@ -3404,7 +3394,7 @@ function renderGroupedMaterials(modules) {
         metaHtml = `<span>リンク</span>`;
       }
 
-      // アクションボタンの生成
+      // アクションボタンの生成（シンプル＆クリーン）
       let actionHtml = '';
       if (isFile) {
         actionHtml = `
@@ -3444,7 +3434,6 @@ function renderGroupedMaterials(modules) {
           `;
         }
       } else if (ytId) {
-        // 保存ボタンの生成
         actionHtml = `
           <button type="button" class="action-chip-btn action-download btn-yt-dl-trigger" title="動画をダウンロードフォルダに保存">
             <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
@@ -3460,13 +3449,6 @@ function renderGroupedMaterials(modules) {
         `;
       }
 
-      const lockBadgeHtml = (isItemLocked || isItemUnpublished) ? `
-        <span class="item-lock-chip ${isItemUnpublished ? 'unpublished' : 'locked'}" title="未公開の講義資料です（クリックでプレビュー・保存を試行します）">
-          <svg width="10" height="10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
-          <span>${it.unlockAt && new Date(it.unlockAt) > new Date() ? `${utils.formatDate(it.unlockAt)} 公開` : (isItemUnpublished ? '未公開' : 'ロック')}</span>
-        </span>
-      ` : '';
-
       card.innerHTML = `
         <div class="module-file-left">
           <div class="module-file-icon ${iconClass}">
@@ -3475,7 +3457,6 @@ function renderGroupedMaterials(modules) {
           <div class="module-file-info">
             <div class="module-file-title-wrap">
               <span class="module-file-title" title="${title}">${title}</span>
-              ${lockBadgeHtml}
             </div>
             <div class="module-file-meta">
               ${metaHtml}

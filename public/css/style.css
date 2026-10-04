@@ -2222,91 +2222,11 @@ a:hover {
   background: var(--bg-input);
 }
 
-/* 未公開・ロック中の講義資料カード */
-.module-file-card.is-locked,
-.module-file-card.is-unpublished {
-  background: rgba(255, 255, 255, 0.02);
-  border-color: rgba(255, 255, 255, 0.08);
-  opacity: 0.88;
-}
-
-[data-theme="light"] .module-file-card.is-locked,
-[data-theme="light"] .module-file-card.is-unpublished {
-  background: #f8fafc;
-  border-color: #e2e8f0;
-  opacity: 0.9;
-}
-
-.module-file-card.is-locked:hover,
-.module-file-card.is-unpublished:hover {
-  opacity: 1;
-  background: var(--bg-card-hover);
-  border-color: rgba(245, 158, 11, 0.45);
-}
-
 .module-file-title-wrap {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-.item-lock-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 1px 7px;
-  font-size: 11px;
-  font-weight: 600;
-  border-radius: 999px;
-  line-height: 1.4;
-  vertical-align: middle;
-  flex-shrink: 0;
-}
-
-.item-lock-chip.unpublished {
-  background: rgba(245, 158, 11, 0.15);
-  color: #fbbf24;
-  border: 1px solid rgba(245, 158, 11, 0.35);
-}
-
-.item-lock-chip.locked {
-  background: rgba(148, 163, 184, 0.15);
-  color: #94a3b8;
-  border: 1px solid rgba(148, 163, 184, 0.28);
-}
-
-[data-theme="light"] .item-lock-chip.unpublished {
-  background: #fef3c7;
-  color: #b45309;
-  border-color: #fde68a;
-}
-
-[data-theme="light"] .item-lock-chip.locked {
-  background: #f1f5f9;
-  color: #64748b;
-  border-color: #cbd5e1;
-}
-
-/* モジュールヘッダーの未公開バッジ */
-.module-lock-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11.5px;
-  font-weight: 600;
-  padding: 2px 9px;
-  border-radius: 999px;
-  background: rgba(245, 158, 11, 0.16);
-  color: #fbbf24;
-  border: 1px solid rgba(245, 158, 11, 0.4);
-  margin-left: 6px;
-}
-
-[data-theme="light"] .module-lock-badge {
-  background: #fef3c7;
-  color: #b45309;
-  border-color: #fde68a;
 }
 
 .module-file-left {
