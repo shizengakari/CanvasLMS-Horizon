@@ -446,17 +446,22 @@ if (!gotTheLock) {
 
     if (pendingAsarUpdate && fs.existsSync(pendingAsarUpdate.pendingFile)) {
       // Windows用ホットパッチ再起動バッチスクリプト
+      // stdin がリダイレクトされていると timeout は即終了するため、待機には ping を使う
+      // コピーは最大10回まで再試行し、失敗した場合は現在のバージョンのまま再起動する
       const updateDir = path.dirname(pendingAsarUpdate.pendingFile);
       const batPath = path.join(updateDir, 'apply-update.bat');
       const batContent = `@echo off
 chcp 65001 >nul
-timeout /t 1 /nobreak >nul
+ping -n 2 127.0.0.1 >nul
+set /a retries=0
 :retry
 copy /y "${pendingAsarUpdate.pendingFile}" "${pendingAsarUpdate.targetAsar}" >nul 2>&1
-if errorlevel 1 (
-  timeout /t 1 /nobreak >nul
-  goto retry
-)
+if not errorlevel 1 goto launch
+set /a retries+=1
+if %retries% geq 10 goto launch
+ping -n 2 127.0.0.1 >nul
+goto retry
+:launch
 start "" "${pendingAsarUpdate.exePath}"
 del "${pendingAsarUpdate.pendingFile}" >nul 2>&1
 (goto) 2>nul & del "%~f0"
