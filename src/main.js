@@ -409,6 +409,12 @@ if (!gotTheLock) {
         fileStream.end();
       });
 
+      // 不完全なファイルで app.asar を上書きしないようサイズを検証する
+      if (totalBytes > 0 && receivedBytes !== totalBytes) {
+        try { ofs.unlinkSync(pendingFile); } catch (_) {}
+        throw new Error(`ダウンロードが不完全です (${receivedBytes} / ${totalBytes} bytes)`);
+      }
+
       pendingAsarUpdate = {
         version: release.tag_name,
         pendingFile,
