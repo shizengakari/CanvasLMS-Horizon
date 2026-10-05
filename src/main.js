@@ -13,6 +13,7 @@ try {
   ofs = fs;
 }
 const { spawn } = require('child_process');
+const { once } = require('events');
 
 // ネイティブメニューバーの無効化
 Menu.setApplicationMenu(null);
@@ -369,6 +370,8 @@ if (!gotTheLock) {
       if (!fs.existsSync(updateDir)) fs.mkdirSync(updateDir, { recursive: true });
       // Electron の asar hook による Invalid package 例外を完全に回避するため拡張子は .bin とする
       const pendingFile = path.join(updateDir, 'app.update.bin');
+      // 再ダウンロードが失敗した場合に、上書き途中のファイルを適用しないよう解除しておく
+      pendingAsarUpdate = null;
 
       const downloadResp = await fetch(downloadUrl);
       if (!downloadResp.ok) throw new Error(`ダウンロード失敗: HTTP ${downloadResp.status}`);
@@ -381,8 +384,11 @@ if (!gotTheLock) {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        fileStream.write(Buffer.from(value));
         receivedBytes += value.length;
+        // 書き込みバッファが満杯なら drain を待ってから次のチャンクを読み込む
+        if (!fileStream.write(Buffer.from(value))) {
+          await once(fileStream, 'drain');
+        }
 
         const now = Date.now();
         if (now - lastProgressTime > 150) {
@@ -404,6 +410,12 @@ if (!gotTheLock) {
         fileStream.on('error', reject);
         fileStream.end();
       });
+
+      // 不完全なファイルで app.asar を上書きしないようサイズを検証する
+      if (totalBytes > 0 && receivedBytes !== totalBytes) {
+        try { ofs.unlinkSync(pendingFile); } catch (_) {}
+        throw new Error(`ダウンロードが不完全です (${receivedBytes} / ${totalBytes} bytes)`);
+      }
 
       pendingAsarUpdate = {
         version: release.tag_name,
