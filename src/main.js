@@ -370,6 +370,8 @@ if (!gotTheLock) {
       if (!fs.existsSync(updateDir)) fs.mkdirSync(updateDir, { recursive: true });
       // Electron の asar hook による Invalid package 例外を完全に回避するため拡張子は .bin とする
       const pendingFile = path.join(updateDir, 'app.update.bin');
+      // 再ダウンロードが失敗した場合に、上書き途中のファイルを適用しないよう解除しておく
+      pendingAsarUpdate = null;
 
       const downloadResp = await fetch(downloadUrl);
       if (!downloadResp.ok) throw new Error(`ダウンロード失敗: HTTP ${downloadResp.status}`);
