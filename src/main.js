@@ -447,6 +447,7 @@ if (!gotTheLock) {
     if (pendingAsarUpdate && fs.existsSync(pendingAsarUpdate.pendingFile)) {
       // Windows用ホットパッチ再起動バッチスクリプト
       const updateDir = path.dirname(pendingAsarUpdate.pendingFile);
+      const batPath = path.join(updateDir, 'apply-update.bat');
       const batContent = `@echo off
 chcp 65001 >nul
 timeout /t 1 /nobreak >nul
