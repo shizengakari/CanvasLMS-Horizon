@@ -13,6 +13,7 @@ try {
   ofs = fs;
 }
 const { spawn } = require('child_process');
+const { once } = require('events');
 
 // ネイティブメニューバーの無効化
 Menu.setApplicationMenu(null);
@@ -381,8 +382,11 @@ if (!gotTheLock) {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        fileStream.write(Buffer.from(value));
         receivedBytes += value.length;
+        // 書き込みバッファが満杯なら drain を待ってから次のチャンクを読み込む
+        if (!fileStream.write(Buffer.from(value))) {
+          await once(fileStream, 'drain');
+        }
 
         const now = Date.now();
         if (now - lastProgressTime > 150) {
