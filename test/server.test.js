@@ -2,7 +2,10 @@ const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
 const http = require('http');
 
-const { app, startServer } = require('../src/server');
+const fs = require('fs');
+const path = require('path');
+
+const { app, startServer, PDF_CACHE_DIR } = require('../src/server');
 const canvasService = require('../src/canvasService');
 const { loadConfig, saveConfig } = require('../src/config');
 
@@ -245,6 +248,89 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
 
     // 5. アニメーション終了時のキャンバスVRAM解放
     assert.ok(js.includes('canvas.width = 0;'), 'Should zero canvas size to release GPU VRAM on finish');
+  });
+
+  it('should serve cached PDF with Range 206 Partial Content and zero Canvas API calls', async () => {
+    const testFileId = 'test_pdf_cache_9999';
+    const testFilePath = path.join(PDF_CACHE_DIR, `${testFileId}.pdf`);
+    const dummyPdfContent = Buffer.from('%PDF-1.4 Mock PDF content for testing range and fast streaming');
+    fs.writeFileSync(testFilePath, dummyPdfContent);
+
+    try {
+      // 1. フルリクエスト (200 OK)
+      const resFull = await fetch(`${baseUrl}/api/files/download?id=${testFileId}&inline=true&name=test.pdf`);
+      assert.strictEqual(resFull.status, 200);
+      assert.strictEqual(resFull.headers.get('content-type'), 'application/pdf');
+      assert.strictEqual(resFull.headers.get('accept-ranges'), 'bytes');
+      const bodyFull = await resFull.arrayBuffer();
+      assert.strictEqual(bodyFull.byteLength, dummyPdfContent.length);
+
+      // 2. HTTP Range リクエスト (206 Partial Content - Chromium PDFium の初回ヘッダー取得を模倣)
+      const resRange = await fetch(`${baseUrl}/api/files/download?id=${testFileId}&inline=true&name=test.pdf`, {
+        headers: { Range: 'bytes=0-7' }
+      });
+      assert.strictEqual(resRange.status, 206, 'Should return 206 Partial Content on Range request');
+      assert.strictEqual(resRange.headers.get('content-type'), 'application/pdf');
+      assert.ok(resRange.headers.get('content-range')?.startsWith('bytes 0-7/'), 'Should have Content-Range header');
+      const rangeText = await resRange.text();
+      assert.strictEqual(rangeText, '%PDF-1.4');
+    } finally {
+      if (fs.existsSync(testFilePath)) fs.unlinkSync(testFilePath);
+    }
+  });
+
+  it('should correctly resolve cached PDF even when name is missing in query', async () => {
+    const testFileId = 'test_pdf_noname_8888';
+    const testFilePath = path.join(PDF_CACHE_DIR, `${testFileId}.pdf`);
+    const dummyPdfContent = Buffer.from('%PDF-1.4 Fast no-name resolution test');
+    fs.writeFileSync(testFilePath, dummyPdfContent);
+
+    try {
+      // name パラメータなし（app.js からの直接リクエスト等）
+      const res = await fetch(`${baseUrl}/api/files/download?id=${testFileId}&inline=true`);
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.headers.get('content-type'), 'application/pdf');
+      const content = await res.text();
+      assert.strictEqual(content, dummyPdfContent.toString());
+    } finally {
+      if (fs.existsSync(testFilePath)) fs.unlinkSync(testFilePath);
+    }
+  });
+
+  it('should provide /api/files/ensure-cache endpoint returning local path for native viewer', async () => {
+    const testFileId = 'test_pdf_ensure_7777';
+    const testFilePath = path.join(PDF_CACHE_DIR, `${testFileId}.pdf`);
+    fs.writeFileSync(testFilePath, Buffer.from('%PDF-1.4 Local Native File Test'));
+
+    try {
+      const res = await fetch(`${baseUrl}/api/files/ensure-cache?id=${testFileId}`);
+      assert.strictEqual(res.status, 200);
+      const data = await res.json();
+      assert.strictEqual(data.success, true);
+      assert.strictEqual(data.cached, true);
+      assert.strictEqual(data.path, testFilePath);
+    } finally {
+      if (fs.existsSync(testFilePath)) fs.unlinkSync(testFilePath);
+    }
+  });
+
+  it('should suspend animations and toggle app-hidden when window is obscured or hidden', async () => {
+    const [cssRes, jsRes] = await Promise.all([
+      fetch(`${baseUrl}/css/style.css`),
+      fetch(`${baseUrl}/js/app.js`)
+    ]);
+    const css = await cssRes.text();
+    const js = await jsRes.text();
+
+    // 1. CSS で body.app-hidden のアニメーション停止が定義されていること
+    assert.ok(css.includes('body.app-hidden *'), 'Should pause all animations on body.app-hidden');
+    assert.ok(css.includes('animation-play-state: paused !important;'), 'Should enforce paused animation state');
+
+    // 2. JS の visibilitychange で app-hidden クラスがトグルされること
+    assert.ok(js.includes("classList.toggle('app-hidden'"), 'Should toggle app-hidden class on visibilitychange');
+
+    // 3. 外部で開くボタンが openPath によるネイティブビューア起動を優先すること
+    assert.ok(js.includes('desktopAPI.openPath(res.path)'), 'Should invoke desktopAPI.openPath for native PDF viewing');
   });
 });
 

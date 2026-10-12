@@ -342,18 +342,114 @@ cleanOldPdfCaches();
 const pdfCleanTimer = setInterval(cleanOldPdfCaches, 6 * 60 * 60 * 1000);
 if (pdfCleanTimer.unref) pdfCleanTimer.unref();
 
+const pendingPdfDownloads = new Map();
+
+/**
+ * PDFファイルをローカルディスクキャッシュ (%TEMP%/canvas_horizon_pdf_cache/{fileId}.pdf) に保存・確保
+ * 複数リクエスト・Range要求が同時に来ても一度だけ完全ダウンロードを行い競合を防止
+ */
+async function ensurePdfCached(fileId, targetUrl, courseId, fallbackName) {
+  const cachedFilePath = path.join(PDF_CACHE_DIR, `${fileId}.pdf`);
+  if (fs.existsSync(cachedFilePath)) {
+    try {
+      const stats = fs.statSync(cachedFilePath);
+      if (stats.size > 0) return cachedFilePath;
+    } catch (_) {}
+  }
+
+  if (pendingPdfDownloads.has(fileId)) {
+    return pendingPdfDownloads.get(fileId);
+  }
+
+  const downloadPromise = (async () => {
+    const tempPath = path.join(PDF_CACHE_DIR, `${fileId}.tmp.${Date.now()}`);
+    try {
+      const cfg = loadConfig();
+      let dlUrl = targetUrl;
+      if (!dlUrl) {
+        const fileInfo = await canvasService.resolveFileDownload(fileId, courseId);
+        if (fileInfo?.url) dlUrl = fileInfo.url;
+      }
+      if (!dlUrl) throw new Error(`Cannot resolve download URL for fileId ${fileId}`);
+
+      if (dlUrl.startsWith('/')) {
+        dlUrl = new URL(dlUrl, cfg.baseUrl).toString();
+      }
+
+      const canvasHost = getCanvasHost(cfg);
+      let urlHost = '';
+      try { urlHost = new URL(dlUrl).host; } catch (_) {}
+      const fetchHeaders = {};
+      if (urlHost && urlHost === canvasHost) {
+        fetchHeaders['Authorization'] = `Bearer ${cfg.apiToken}`;
+      }
+
+      let resp = await fetch(dlUrl, {
+        headers: fetchHeaders,
+        redirect: 'follow',
+        signal: AbortSignal.timeout(60000)
+      });
+
+      if (!resp.ok && urlHost === canvasHost) {
+        try {
+          const retry = new URL(dlUrl);
+          retry.searchParams.set('access_token', cfg.apiToken);
+          resp = await fetch(retry.toString(), {
+            headers: fetchHeaders,
+            redirect: 'follow',
+            signal: AbortSignal.timeout(60000)
+          });
+        } catch (_) {}
+      }
+
+      if (!resp.ok) {
+        throw new Error(`Failed to download PDF: ${resp.status} ${resp.statusText}`);
+      }
+
+      const fileStream = fs.createWriteStream(tempPath);
+      const reader = resp.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const canWrite = fileStream.write(Buffer.from(value));
+        if (!canWrite) {
+          await new Promise((resolve) => fileStream.once('drain', resolve));
+        }
+      }
+      await new Promise((resolve, reject) => {
+        fileStream.end((err) => (err ? reject(err) : resolve()));
+      });
+
+      if (fs.existsSync(cachedFilePath)) {
+        try { fs.unlinkSync(cachedFilePath); } catch (_) {}
+      }
+      fs.renameSync(tempPath, cachedFilePath);
+      return cachedFilePath;
+    } catch (err) {
+      try {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      } catch (_) {}
+      throw err;
+    } finally {
+      pendingPdfDownloads.delete(fileId);
+    }
+  })();
+
+  pendingPdfDownloads.set(fileId, downloadPromise);
+  return downloadPromise;
+}
+
 // 10. ファイルダウンロードプロキシ（PDFインライン表示 / 直接ストリーミング）
 app.get('/api/files/download', async (req, res) => {
   try {
     const { url, id, name, inline, courseId } = req.query;
     let targetUrl = url ? String(url).trim() : null;
-
-    const encodedName = encodeURIComponent(name || 'document.pdf');
+    let fileId = id ? String(id).trim() : null;
+    let targetCourseId = courseId ? String(courseId).trim() : null;
+    let fileName = name ? String(name).trim() : null;
     const dispositionType = inline === 'true' ? 'inline' : 'attachment';
 
     // 0. fileId および courseId の抽出（未指定の場合、URL文字列から自動抽出）
-    let fileId = id ? String(id).trim() : null;
-    let targetCourseId = courseId ? String(courseId).trim() : null;
     const verifierParam = req.query.verifier ? String(req.query.verifier).trim() : null;
 
     if (!fileId && targetUrl) {
@@ -363,33 +459,35 @@ app.get('/api/files/download', async (req, res) => {
       if (cMatch && !targetCourseId) targetCourseId = cMatch[1];
     }
 
-    const isPdfRequest = (name && name.toLowerCase().endsWith('.pdf')) || (targetUrl && targetUrl.toLowerCase().includes('.pdf'));
-    const isVideoRequest = (name && /\.(mp4|webm|mkv|mov|m4v|avi|ogv)$/i.test(name)) ||
-                           (targetUrl && /\.(mp4|webm|mkv|mov|m4v|avi|ogv)/i.test(targetUrl));
-
-    const cachedFilePath = (fileId && isPdfRequest && !req.headers.range) ? path.join(PDF_CACHE_DIR, `${fileId}.pdf`) : null;
-
-    // 1. キャッシュが存在する場合はローカルファイルを即座に返却（高速化）
-    if (cachedFilePath && fs.existsSync(cachedFilePath)) {
-      try {
-        const stats = fs.statSync(cachedFilePath);
-        if (stats.size > 0) {
-          res.setHeader('Content-Type', 'application/pdf');
-          res.setHeader('Content-Disposition', `${dispositionType}; filename*=UTF-8''${encodedName}`);
-          res.setHeader('Cache-Control', 'public, max-age=86400');
-          return res.sendFile(cachedFilePath);
-        }
-      } catch (cacheErr) {}
+    // 1. キャッシュが存在する場合はローカルファイルを即座に返却（高速化・Range 206 要求にも完全対応）
+    if (fileId) {
+      const cachedFilePath = path.join(PDF_CACHE_DIR, `${fileId}.pdf`);
+      if (fs.existsSync(cachedFilePath)) {
+        try {
+          const stats = fs.statSync(cachedFilePath);
+          if (stats.size > 0) {
+            const encName = encodeURIComponent(fileName || `${fileId}.pdf`);
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `${dispositionType}; filename*=UTF-8''${encName}`);
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            return res.sendFile(cachedFilePath, { acceptRanges: true });
+          }
+        } catch (cacheErr) {}
+      }
     }
 
     const cfg = loadConfig();
 
     // 2. fileId がある場合は Canvas Files API から署名付きダウンロードURLを最優先で解決
+    let fileData = null;
     if (fileId) {
       try {
-        const fileData = await canvasService.resolveFileDownload(fileId, targetCourseId);
+        fileData = await canvasService.resolveFileDownload(fileId, targetCourseId);
         if (fileData?.url) {
           targetUrl = fileData.url;
+        }
+        if (!fileName && (fileData?.display_name || fileData?.filename)) {
+          fileName = fileData.display_name || fileData.filename;
         }
       } catch (resolveErr) {
         console.warn(`Could not resolve fileId ${fileId} via Canvas API, falling back to direct URL:`, resolveErr.message);
@@ -426,6 +524,33 @@ app.get('/api/files/download', async (req, res) => {
         }
         targetUrl = parsed.toString();
       } catch (e) {}
+    }
+
+    if (!targetUrl && !fileId) {
+      return res.status(400).send('Download URL or File ID required');
+    }
+
+    const encodedName = encodeURIComponent(fileName || 'document.pdf');
+    const isVideoRequest = (fileName && /\.(mp4|webm|mkv|mov|m4v|avi|ogv)$/i.test(fileName)) ||
+                           (targetUrl && /\.(mp4|webm|mkv|mov|m4v|avi|ogv)/i.test(targetUrl));
+    const isPdfRequest = (fileName && fileName.toLowerCase().endsWith('.pdf')) ||
+                         (targetUrl && targetUrl.toLowerCase().includes('.pdf')) ||
+                         (fileData && (fileData['content-type'] === 'application/pdf' || fileData.content_type === 'application/pdf')) ||
+                         (inline === 'true' && !isVideoRequest);
+
+    // 6. PDF かつ fileId がある場合、フルキャッシュを先行取得して Range 206 を完全サポート
+    if (fileId && isPdfRequest) {
+      try {
+        const cachedPath = await ensurePdfCached(fileId, targetUrl, targetCourseId, fileName);
+        if (fs.existsSync(cachedPath)) {
+          res.setHeader('Content-Type', 'application/pdf');
+          res.setHeader('Content-Disposition', `${dispositionType}; filename*=UTF-8''${encodedName}`);
+          res.setHeader('Cache-Control', 'public, max-age=86400');
+          return res.sendFile(cachedPath, { acceptRanges: true });
+        }
+      } catch (cacheErr) {
+        console.warn(`PDF caching failed, falling back to direct stream for ${fileId}:`, cacheErr.message);
+      }
     }
 
     if (!targetUrl) {
@@ -470,7 +595,7 @@ app.get('/api/files/download', async (req, res) => {
 
     let contentType = fileRes.headers.get('content-type') || 'application/octet-stream';
     if (isVideoRequest || contentType.startsWith('video/') || contentType === 'application/mp4') {
-      if (name && name.toLowerCase().endsWith('.webm')) contentType = 'video/webm';
+      if (fileName && fileName.toLowerCase().endsWith('.webm')) contentType = 'video/webm';
       else contentType = 'video/mp4';
     } else if (isPdfRequest || contentType.includes('application/octet-stream')) {
       contentType = 'application/pdf';
@@ -489,9 +614,10 @@ app.get('/api/files/download', async (req, res) => {
     res.setHeader('Cache-Control', 'public, max-age=86400');
 
     // キャッシュ保存用ストリーム（PDFかつ全体リクエスト時のみ安全に書き込み）
-    const cacheWriteStream = cachedFilePath ? fs.createWriteStream(cachedFilePath) : null;
+    const cachedFilePath = (fileId && isPdfRequest) ? path.join(PDF_CACHE_DIR, `${fileId}.pdf`) : null;
+    const cacheWriteStream = (cachedFilePath && !req.headers.range && fileRes.status === 200) ? fs.createWriteStream(cachedFilePath) : null;
 
-    // ストリーミング転送
+    // ストリーミング転送（バックプレッシャー対応）
     const reader = fileRes.body.getReader();
     while (true) {
       const { done, value } = await reader.read();
@@ -502,7 +628,10 @@ app.get('/api/files/download', async (req, res) => {
       }
       const buf = Buffer.from(value);
       if (cacheWriteStream) cacheWriteStream.write(buf);
-      res.write(buf);
+      const ok = res.write(buf);
+      if (!ok) {
+        await new Promise((resolve) => res.once('drain', resolve));
+      }
     }
   } catch (err) {
     console.error('File download proxy error:', err);
@@ -511,6 +640,35 @@ app.get('/api/files/download', async (req, res) => {
     }
   }
 });
+
+// 10.05 PDF キャッシュ確保・ネイティブパス解決エンドポイント
+app.get('/api/files/ensure-cache', async (req, res) => {
+  try {
+    const { id, url, name, courseId } = req.query;
+    let fileId = id ? String(id).trim() : null;
+    let targetUrl = url ? String(url).trim() : null;
+    let targetCourseId = courseId ? String(courseId).trim() : null;
+    let fileName = name ? String(name).trim() : 'document.pdf';
+
+    if (!fileId && targetUrl) {
+      const fMatch = targetUrl.match(/\/files\/(\d+)/);
+      if (fMatch) fileId = fMatch[1];
+    }
+
+    if (!fileId) {
+      return res.status(400).json({ success: false, error: 'File ID required' });
+    }
+
+    const cachedFilePath = await ensurePdfCached(fileId, targetUrl, targetCourseId, fileName);
+    if (fs.existsSync(cachedFilePath)) {
+      return res.json({ success: true, cached: true, path: cachedFilePath });
+    }
+    return res.status(500).json({ success: false, error: 'Failed to cache PDF' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 
 // 10.1 メディアオブジェクト（動画/音声）URL解決エンドポイント
 app.get('/api/media/resolve', async (req, res) => {
@@ -1288,7 +1446,7 @@ function startServer(port = PORT) {
   });
 }
 
-module.exports = { app, startServer, PORT, compareSemver };
+module.exports = { app, startServer, PORT, compareSemver, PDF_CACHE_DIR, ensurePdfCached };
 
 if (require.main === module) {
   startServer();

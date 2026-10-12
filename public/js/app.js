@@ -1203,6 +1203,7 @@ async function setupBatteryManager() {
 
   // バックグラウンド・最小化時のリソース最適化（非表示時は進行中のアニメーション・ポーリング・VRAMを完全休止）
   document.addEventListener('visibilitychange', () => {
+    document.body.classList.toggle('app-hidden', document.hidden);
     if (document.hidden) {
       if (window._petalAnimId) {
         cancelAnimationFrame(window._petalAnimId);
@@ -3684,9 +3685,10 @@ document.getElementById('btn-download-all-zip').addEventListener('click', async 
   }
 });
 
-// アプリ内 PDF ビューアモーダル（全画面表示対応）
+// アプリ内 PDF ビューアモーダル（全画面表示対応・動的メモリ解放対応）
 let isPdfFullscreen = false;
 let currentPdfFile = null;
+let pdfSpinnerTimer = null;
 
 function togglePdfFullscreen(forceState) {
   isPdfFullscreen = toggleModalFullscreen('pdf-modal-container', 'pdf-expand-icon', 'pdf-compress-icon', forceState);
@@ -3694,7 +3696,7 @@ function togglePdfFullscreen(forceState) {
 
 function openPdfPreviewModal(fileUrl, fileName, fileId = null, courseId = null) {
   const modal = document.getElementById('pdf-modal');
-  const iframe = document.getElementById('pdf-iframe');
+  let iframe = document.getElementById('pdf-iframe');
   const title = document.getElementById('pdf-modal-title');
   const spinner = document.getElementById('pdf-loading-spinner');
 
@@ -3712,8 +3714,23 @@ function openPdfPreviewModal(fileUrl, fileName, fileId = null, courseId = null) 
     spinner.style.opacity = '1';
   }
 
+  // 閉じた際に DOM から完全除去されていた場合は再生成
+  const container = document.getElementById('pdf-iframe-container') || modal?.querySelector('.modal-container > div:last-child');
+  if (!iframe && container) {
+    iframe = document.createElement('iframe');
+    iframe.id = 'pdf-iframe';
+    iframe.className = 'pdf-viewer-frame';
+    iframe.style.cssText = 'flex: 1; border: none; width: 100%; height: 100%; position: relative; z-index: 1;';
+    container.appendChild(iframe);
+  }
+
+  if (pdfSpinnerTimer) {
+    clearTimeout(pdfSpinnerTimer);
+    pdfSpinnerTimer = null;
+  }
+
   // タイムアウトによる安全なスピナー解除
-  let spinnerTimer = setTimeout(() => {
+  pdfSpinnerTimer = setTimeout(() => {
     if (spinner) {
       spinner.style.opacity = '0';
       setTimeout(() => { spinner.style.display = 'none'; }, 200);
@@ -3721,17 +3738,26 @@ function openPdfPreviewModal(fileUrl, fileName, fileId = null, courseId = null) 
   }, 6000);
 
   // 高速な読み込み完了検知
-  iframe.onload = () => {
-    clearTimeout(spinnerTimer);
-    if (spinner) {
-      spinner.style.opacity = '0';
-      setTimeout(() => { spinner.style.display = 'none'; }, 200);
-    }
-  };
+  if (iframe) {
+    iframe.onload = () => {
+      if (pdfSpinnerTimer) {
+        clearTimeout(pdfSpinnerTimer);
+        pdfSpinnerTimer = null;
+      }
+      if (spinner) {
+        spinner.style.opacity = '0';
+        setTimeout(() => { spinner.style.display = 'none'; }, 200);
+      }
+    };
 
-  // PDF表示幅の設定
-  const viewerUrl = fileUrl.includes('#') ? fileUrl : `${fileUrl}#view=FitH&toolbar=1`;
-  iframe.src = viewerUrl;
+    // PDF表示幅の設定 (ファイル名が含まれていない場合は付与してサーバー側キャッシュ整合性を向上)
+    let viewerUrl = fileUrl;
+    if (fileName && !viewerUrl.includes('name=')) {
+      viewerUrl += (viewerUrl.includes('?') ? '&' : '?') + `name=${encodeURIComponent(fileName)}`;
+    }
+    const targetViewerUrl = viewerUrl.includes('#') ? viewerUrl : `${viewerUrl}#view=FitH&toolbar=1`;
+    iframe.src = targetViewerUrl;
+  }
   modal.classList.add('open');
 }
 
@@ -3742,10 +3768,22 @@ function closePdfModal() {
   if (isPdfFullscreen) {
     togglePdfFullscreen(false);
   }
+  if (pdfSpinnerTimer) {
+    clearTimeout(pdfSpinnerTimer);
+    pdfSpinnerTimer = null;
+  }
   if (spinner) {
     spinner.style.display = 'none';
   }
-  iframe.src = 'about:blank';
+  // 完全メモリ解放: iframe の再生・リクエストを停止し、about:blank にリダイレクト後、
+  // DOM から完全除去することで Chromium / WebView2 の PDFium プラグインプロセスおよび GPU テクスチャを即座に破棄
+  if (iframe) {
+    try {
+      iframe.contentWindow?.stop?.();
+    } catch (_) {}
+    iframe.src = 'about:blank';
+    iframe.remove();
+  }
   modal.classList.remove('open');
   currentPdfFile = null;
 }
@@ -3753,6 +3791,45 @@ function closePdfModal() {
 const pdfCloseBtn = document.getElementById('pdf-modal-close-btn');
 if (pdfCloseBtn) {
   pdfCloseBtn.addEventListener('click', closePdfModal);
+}
+
+const pdfExternalBtn = document.getElementById('pdf-modal-external-btn');
+if (pdfExternalBtn) {
+  pdfExternalBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (!currentPdfFile) return;
+
+    // 1. デスクトップ環境 (Electron / Tauri): ローカルキャッシュを確保し、OS 既定の軽量ビューア (SumatraPDF, Acrobat, Edge等) で直接開く
+    if (window.desktopAPI && typeof window.desktopAPI.openPath === 'function' && currentPdfFile.id) {
+      try {
+        const query = new URLSearchParams({
+          id: String(currentPdfFile.id),
+          name: currentPdfFile.name || '',
+          courseId: String(currentPdfFile.courseId || '')
+        });
+        const res = await api.get(`/api/files/ensure-cache?${query.toString()}`);
+        if (res?.path) {
+          const success = await window.desktopAPI.openPath(res.path);
+          if (success) {
+            showToast('外部ビューアで開きました', 'info');
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Native openPath failed, falling back to browser window:', err);
+      }
+    }
+
+    // 2. ブラウザまたはフォールバック
+    const directUrl = currentPdfFile.url.startsWith('http')
+      ? currentPdfFile.url
+      : `${window.location.origin}${currentPdfFile.url}`;
+    if (window.desktopAPI && typeof window.desktopAPI.openExternal === 'function') {
+      window.desktopAPI.openExternal(directUrl);
+    } else {
+      window.open(directUrl, '_blank');
+    }
+  });
 }
 
 const pdfFsBtn = document.getElementById('pdf-modal-fullscreen-btn');

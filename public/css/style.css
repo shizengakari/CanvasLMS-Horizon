@@ -226,6 +226,12 @@ body.battery-saver .toast {
   transition: opacity 0.15s ease, transform 0.15s ease !important;
 }
 
+/* ウィンドウ非表示・最小化時のCPU/GPU完全休止（Package C-State阻害ゼロ化） */
+body.app-hidden *,
+body.app-hidden {
+  animation-play-state: paused !important;
+}
+
 /* 電源・省電力モード切替丸型アイコンボタン (省電力モード時のみ表示) */
 .power-mode-btn {
   position: relative;

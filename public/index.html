@@ -645,6 +645,10 @@
           <span style="font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" id="pdf-modal-title">PDFプレビュー</span>
         </div>
         <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+          <button type="button" class="action-chip-btn action-download" id="pdf-modal-external-btn" title="OS既定のPDFビューアで開く (Adobe Acrobat, Edge等)">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+            <span>外部で開く</span>
+          </button>
           <button type="button" class="action-chip-btn action-download" id="pdf-modal-download-btn" title="ダウンロードフォルダに保存">
             <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
             <span>保存</span>
@@ -658,7 +662,7 @@
           </button>
         </div>
       </div>
-      <div style="flex: 1; position: relative; width: 100%; height: 100%; display: flex; overflow: hidden; background: #1a1a24;">
+      <div id="pdf-iframe-container" style="flex: 1; position: relative; width: 100%; height: 100%; display: flex; overflow: hidden; background: #1a1a24;">
         <div id="pdf-loading-spinner" style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--text-muted); background: #111420; z-index: 2; transition: opacity 0.25s ease;">
           <svg class="spin" width="28" height="28" fill="none" stroke="var(--accent-primary)" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
           <span style="font-size: 13px; font-weight: 500;">読み込み中...</span>
