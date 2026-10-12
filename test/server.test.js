@@ -328,9 +328,6 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
 
     // 2. JS の visibilitychange で app-hidden クラスがトグルされること
     assert.ok(js.includes("classList.toggle('app-hidden'"), 'Should toggle app-hidden class on visibilitychange');
-
-    // 3. 外部で開くボタンが openPath によるネイティブビューア起動を優先すること
-    assert.ok(js.includes('desktopAPI.openPath(res.path)'), 'Should invoke desktopAPI.openPath for native PDF viewing');
   });
 });
 

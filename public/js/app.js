@@ -3793,44 +3793,6 @@ if (pdfCloseBtn) {
   pdfCloseBtn.addEventListener('click', closePdfModal);
 }
 
-const pdfExternalBtn = document.getElementById('pdf-modal-external-btn');
-if (pdfExternalBtn) {
-  pdfExternalBtn.addEventListener('click', async (e) => {
-    e.preventDefault();
-    if (!currentPdfFile) return;
-
-    // 1. デスクトップ環境 (Electron / Tauri): ローカルキャッシュを確保し、OS 既定の軽量ビューア (SumatraPDF, Acrobat, Edge等) で直接開く
-    if (window.desktopAPI && typeof window.desktopAPI.openPath === 'function' && currentPdfFile.id) {
-      try {
-        const query = new URLSearchParams({
-          id: String(currentPdfFile.id),
-          name: currentPdfFile.name || '',
-          courseId: String(currentPdfFile.courseId || '')
-        });
-        const res = await api.get(`/api/files/ensure-cache?${query.toString()}`);
-        if (res?.path) {
-          const success = await window.desktopAPI.openPath(res.path);
-          if (success) {
-            showToast('外部ビューアで開きました', 'info');
-            return;
-          }
-        }
-      } catch (err) {
-        console.warn('Native openPath failed, falling back to browser window:', err);
-      }
-    }
-
-    // 2. ブラウザまたはフォールバック
-    const directUrl = currentPdfFile.url.startsWith('http')
-      ? currentPdfFile.url
-      : `${window.location.origin}${currentPdfFile.url}`;
-    if (window.desktopAPI && typeof window.desktopAPI.openExternal === 'function') {
-      window.desktopAPI.openExternal(directUrl);
-    } else {
-      window.open(directUrl, '_blank');
-    }
-  });
-}
 
 const pdfFsBtn = document.getElementById('pdf-modal-fullscreen-btn');
 if (pdfFsBtn) {
