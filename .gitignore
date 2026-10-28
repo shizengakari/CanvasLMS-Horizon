@@ -11,6 +11,14 @@ src-tauri/target/
 
 # User Private Configuration & Tokens
 config.json
+.env
+.env.*
+!.env.example
+
+# Local Utility Scripts & Shortcuts
+*.bat
+*.cmd
+*.lnk
 
 # Logs & Temporary Files
 *.log
