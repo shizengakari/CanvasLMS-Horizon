@@ -242,7 +242,48 @@ app.get('/api/courses/:courseId/pages/:pageUrl', async (req, res) => {
     const page = await canvasService.getPage(req.params.courseId, req.params.pageUrl);
     res.json({ success: true, page });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    // 403/404 ロック・非公開ページの場合も 500 Internal Server Error ではなく案内オブジェクトを返却
+    const cfg = loadConfig();
+    let cleanSlug = String(req.params.pageUrl || '').trim();
+    try { cleanSlug = decodeURIComponent(cleanSlug); } catch (_) {}
+    const fallbackUrl = cfg.baseUrl
+      ? `${cfg.baseUrl.replace(/\/+$/, '')}/courses/${req.params.courseId}/pages/${encodeURIComponent(cleanSlug)}`
+      : null;
+    res.json({
+      success: true,
+      page: {
+        title: cleanSlug,
+        body: '',
+        updatedAt: null,
+        url: fallbackUrl,
+        lockedForUser: true,
+        lockExplanation: 'このページは現在Canvas上でロック（閲覧期間外）または非公開に設定されています。'
+      }
+    });
+  }
+});
+
+// 6-4. ディスカッショントピック本文取得
+app.get('/api/courses/:courseId/discussions/:topicId', async (req, res) => {
+  try {
+    const discussion = await canvasService.getDiscussion(req.params.courseId, req.params.topicId);
+    res.json({ success: true, page: discussion, discussion });
+  } catch (err) {
+    const cfg = loadConfig();
+    const fallbackUrl = cfg.baseUrl
+      ? `${cfg.baseUrl.replace(/\/+$/, '')}/courses/${req.params.courseId}/discussion_topics/${encodeURIComponent(req.params.topicId)}`
+      : null;
+    res.json({
+      success: true,
+      page: {
+        title: 'ディスカッション',
+        body: '',
+        updatedAt: null,
+        url: fallbackUrl,
+        lockedForUser: true,
+        lockExplanation: 'このディスカッションは現在Canvas上でロックまたは非公開に設定されています。'
+      }
+    });
   }
 });
 
@@ -305,7 +346,281 @@ app.post('/api/courses/:courseId/assignments/:assignmentId/submit-text', async (
 const PDF_CACHE_DIR = path.join(os.tmpdir(), 'canvas_horizon_pdf_cache');
 try { fs.mkdirSync(PDF_CACHE_DIR, { recursive: true }); } catch (e) {}
 
-// 古いPDFキャッシュの自動クリーンアップ（ディスク容量とメモリの肥大化防止）
+// ファイルが有効なPDF（%PDFマジックバイトを含む）か検証し、破損キャッシュは自動排除
+function isValidPdfFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return false;
+    const stats = fs.statSync(filePath);
+    if (stats.size < 4) {
+      try { fs.unlinkSync(filePath); } catch (_) {}
+      return false;
+    }
+    const fd = fs.openSync(filePath, 'r');
+    let isValid = false;
+    try {
+      const buf = Buffer.alloc(32);
+      const bytesRead = fs.readSync(fd, buf, 0, 32, 0);
+      if (bytesRead >= 4) {
+        const head = buf.subarray(0, bytesRead).toString('latin1');
+        isValid = head.includes('%PDF');
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    if (!isValid) {
+      try { fs.unlinkSync(filePath); } catch (_) {}
+    }
+    return isValid;
+  } catch (_) {
+    return false;
+  }
+}
+
+// MIMEタイプと拡張子の相互変換マップ
+const EXT_TO_MIME = {
+  '.pdf': 'application/pdf',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.doc': 'application/msword',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.xls': 'application/vnd.ms-excel',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.odt': 'application/vnd.oasis.opendocument.text',
+  '.ods': 'application/vnd.oasis.opendocument.spreadsheet',
+  '.odp': 'application/vnd.oasis.opendocument.presentation',
+  '.rtf': 'application/rtf',
+  '.zip': 'application/zip',
+  '.7z': 'application/x-7z-compressed',
+  '.rar': 'application/vnd.rar',
+  '.tar': 'application/x-tar',
+  '.gz': 'application/gzip',
+  '.tgz': 'application/gzip',
+  '.csv': 'text/csv; charset=utf-8',
+  '.tsv': 'text/tab-separated-values; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
+  '.log': 'text/plain; charset=utf-8',
+  '.md': 'text/markdown; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.ipynb': 'application/json; charset=utf-8',
+  '.xml': 'application/xml; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/plain; charset=utf-8',
+  '.ts': 'text/plain; charset=utf-8',
+  '.py': 'text/plain; charset=utf-8',
+  '.java': 'text/plain; charset=utf-8',
+  '.c': 'text/plain; charset=utf-8',
+  '.cpp': 'text/plain; charset=utf-8',
+  '.h': 'text/plain; charset=utf-8',
+  '.hpp': 'text/plain; charset=utf-8',
+  '.cs': 'text/plain; charset=utf-8',
+  '.go': 'text/plain; charset=utf-8',
+  '.rs': 'text/plain; charset=utf-8',
+  '.rb': 'text/plain; charset=utf-8',
+  '.php': 'text/plain; charset=utf-8',
+  '.sh': 'text/plain; charset=utf-8',
+  '.bat': 'text/plain; charset=utf-8',
+  '.ps1': 'text/plain; charset=utf-8',
+  '.sql': 'text/plain; charset=utf-8',
+  '.yaml': 'text/plain; charset=utf-8',
+  '.yml': 'text/plain; charset=utf-8',
+  '.toml': 'text/plain; charset=utf-8',
+  '.ini': 'text/plain; charset=utf-8',
+  '.r': 'text/plain; charset=utf-8',
+  '.tex': 'text/plain; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.mp4': 'video/mp4',
+  '.m4v': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.mkv': 'video/x-matroska',
+  '.avi': 'video/x-msvideo',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.m4a': 'audio/mp4',
+  '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac'
+};
+
+const MIME_TO_EXT = {
+  'application/pdf': '.pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  'application/msword': '.doc',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+  'application/vnd.ms-excel': '.xls',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
+  'application/vnd.ms-powerpoint': '.ppt',
+  'application/vnd.oasis.opendocument.text': '.odt',
+  'application/vnd.oasis.opendocument.spreadsheet': '.ods',
+  'application/vnd.oasis.opendocument.presentation': '.odp',
+  'application/rtf': '.rtf',
+  'application/zip': '.zip',
+  'application/x-zip-compressed': '.zip',
+  'application/x-7z-compressed': '.7z',
+  'application/vnd.rar': '.rar',
+  'application/x-rar-compressed': '.rar',
+  'application/x-tar': '.tar',
+  'application/gzip': '.gz',
+  'application/x-gzip': '.gz',
+  'text/csv': '.csv',
+  'text/tab-separated-values': '.tsv',
+  'text/plain': '.txt',
+  'text/markdown': '.md',
+  'application/json': '.json',
+  'application/xml': '.xml',
+  'text/xml': '.xml',
+  'text/html': '.html',
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  'image/svg+xml': '.svg',
+  'image/bmp': '.bmp',
+  'video/mp4': '.mp4',
+  'application/mp4': '.mp4',
+  'video/webm': '.webm',
+  'video/quicktime': '.mov',
+  'video/x-matroska': '.mkv',
+  'audio/mpeg': '.mp3',
+  'audio/wav': '.wav',
+  'audio/x-wav': '.wav',
+  'audio/mp4': '.m4a',
+  'audio/ogg': '.ogg',
+  'audio/flac': '.flac'
+};
+
+// Content-Disposition ヘッダーから元ファイル名を抽出
+function extractFilenameFromContentDisposition(disposition) {
+  if (!disposition || typeof disposition !== 'string') return null;
+  const starMatch = disposition.match(/filename\*\s*=\s*(?:UTF-8|utf-8)?''([^;\r\n]+)/i);
+  if (starMatch && starMatch[1]) {
+    try {
+      return decodeURIComponent(starMatch[1].trim().replace(/^["']|["']$/g, ''));
+    } catch (_) {}
+  }
+  const stdMatch = disposition.match(/filename\s*=\s*"([^"]+)"/i) || disposition.match(/filename\s*=\s*([^;\s\r\n]+)/i);
+  if (stdMatch && stdMatch[1]) {
+    const raw = stdMatch[1].trim().replace(/^["']|["']$/g, '');
+    try {
+      return decodeURIComponent(raw);
+    } catch (_) {
+      return raw;
+    }
+  }
+  return null;
+}
+
+// ファイル名と拡張子を精密に正規化（.docx.pdf 等の二重拡張子を防止し、本来の拡張子を補完）
+function normalizeDownloadFileName(rawName, fileData = null, contentDisposition = null, responseContentType = null) {
+  const doubleExtRegex = /\.(docx?|xlsx?|pptx?|odt|ods|odp|rtf|zip|7z|rar|tar|gz|tgz|csv|tsv|txt|log|md|json|ipynb|xml|html?|css|js|ts|py|java|c|cpp|h|hpp|cs|go|rs|rb|php|sh|bat|ps1|sql|yaml|yml|toml|ini|r|tex|png|jpe?g|gif|webp|svg|bmp|ico|mp4|m4v|webm|mov|mkv|avi|mp3|wav|m4a|ogg|flac)\.pdf$/i;
+
+  let name = rawName ? String(rawName).replace(/[\r\n\t]+/g, ' ').trim() : '';
+  if (name) {
+    name = name.replace(doubleExtRegex, '.$1');
+  }
+
+  const cdInput = (contentDisposition && String(contentDisposition).includes('filename'))
+    ? contentDisposition
+    : ((responseContentType && String(responseContentType).includes('filename')) ? responseContentType : contentDisposition);
+  const mimeInput = (responseContentType && !String(responseContentType).includes('filename'))
+    ? responseContentType
+    : ((contentDisposition && !String(contentDisposition).includes('filename')) ? contentDisposition : '');
+
+  const cdName = extractFilenameFromContentDisposition(cdInput);
+  const apiName = fileData ? (fileData.display_name || fileData.displayName || fileData.filename || null) : null;
+  const canonicalName = (apiName || cdName || '').trim();
+
+  const isGenericName = !name || /^(file\.pdf|document\.pdf|download|file|添付ファイル)$/i.test(name);
+  if (isGenericName && canonicalName) {
+    name = canonicalName.replace(doubleExtRegex, '.$1');
+  }
+
+  if (!name) {
+    name = 'download';
+  }
+
+  // 現在のファイル名に既知の拡張子が含まれているか確認
+  const currentExt = path.extname(name).toLowerCase();
+  const hasKnownExt = Boolean(currentExt && (EXT_TO_MIME[currentExt] || /^\.[a-z0-9]{1,6}$/i.test(currentExt)));
+
+  // もし rawName が "document.pdf" や "file.pdf" 以外でも、誤って .pdf が付与されており canonicalName が別拡張子を持つ場合は修正
+  const canonicalExt = canonicalName ? path.extname(canonicalName).toLowerCase() : '';
+  if (currentExt === '.pdf' && canonicalExt && canonicalExt !== '.pdf' && EXT_TO_MIME[canonicalExt]) {
+    name = name.slice(0, -4) + canonicalExt;
+  } else if (!hasKnownExt) {
+    if (canonicalExt) {
+      name += canonicalExt;
+    } else {
+      const rawMime = (fileData && (fileData['content-type'] || fileData.content_type || fileData.contentType)) || mimeInput || '';
+      const cleanMime = String(rawMime).split(';')[0].trim().toLowerCase();
+      if (cleanMime && MIME_TO_EXT[cleanMime]) {
+        name += MIME_TO_EXT[cleanMime];
+      }
+    }
+  }
+
+  // OSファイルシステムで禁止されている文字を置換しつつ拡張子を保持して長さ制限
+  const finalExt = path.extname(name);
+  const finalBase = path.basename(name, finalExt).replace(/[\\/:*?"<>|]/g, '_').trim() || 'file';
+  const safeExt = finalExt.replace(/[\\/:*?"<>|]/g, '');
+  return `${finalBase.slice(0, 140)}${safeExt}`;
+}
+
+function resolveContentType(fileName, responseContentType = '', isPdfRequest = false, isVideoRequest = false) {
+  const ext = fileName ? path.extname(fileName).toLowerCase() : '';
+  if (ext && EXT_TO_MIME[ext]) {
+    return EXT_TO_MIME[ext];
+  }
+  const cleanRespMime = String(responseContentType || '').split(';')[0].trim().toLowerCase();
+  if (isVideoRequest || cleanRespMime.startsWith('video/') || cleanRespMime === 'application/mp4') {
+    if (ext === '.webm') return 'video/webm';
+    return 'video/mp4';
+  }
+  if (isPdfRequest) {
+    return 'application/pdf';
+  }
+  if (cleanRespMime && cleanRespMime !== 'application/octet-stream' && cleanRespMime !== 'binary/octet-stream') {
+    return responseContentType;
+  }
+  return 'application/octet-stream';
+}
+
+// Canvas のファイルURLから wrap=1 を除去し download_frd=1 と verifier を正規化
+function normalizeCanvasFileUrl(rawUrl, cfg, verifierParam = null) {
+  if (!rawUrl) return null;
+  let targetUrl = String(rawUrl).trim();
+  if (targetUrl.startsWith('/') && cfg?.baseUrl) {
+    try {
+      targetUrl = new URL(targetUrl, cfg.baseUrl).toString();
+    } catch (_) {}
+  }
+  try {
+    const parsed = new URL(targetUrl);
+    if (verifierParam && !parsed.searchParams.has('verifier')) {
+      parsed.searchParams.set('verifier', verifierParam);
+    }
+    if (parsed.searchParams.has('wrap')) {
+      parsed.searchParams.delete('wrap');
+    }
+    if (parsed.pathname.includes('/files/') && !parsed.pathname.includes('/api/v1/')) {
+      if (!parsed.searchParams.has('download') && !parsed.searchParams.has('download_frd')) {
+        parsed.searchParams.set('download_frd', '1');
+      }
+    }
+    targetUrl = parsed.toString();
+  } catch (_) {}
+  return targetUrl;
+}
+
+// 古いPDFキャッシュおよび破損キャッシュの自動クリーンアップ（ディスク容量とメモリの肥大化防止）
 function cleanOldPdfCaches() {
   try {
     if (!fs.existsSync(PDF_CACHE_DIR)) return;
@@ -318,6 +633,10 @@ function cleanOldPdfCaches() {
     for (const f of files) {
       const fullPath = path.join(PDF_CACHE_DIR, f);
       try {
+        if (f.endsWith('.pdf') && !isValidPdfFile(fullPath)) {
+          fs.unlinkSync(fullPath);
+          continue;
+        }
         const stat = fs.statSync(fullPath);
         totalSize += stat.size;
         fileStats.push({ path: fullPath, size: stat.size, mtime: stat.mtimeMs });
@@ -351,10 +670,10 @@ const pendingPdfDownloads = new Map();
 async function ensurePdfCached(fileId, targetUrl, courseId, fallbackName) {
   const cachedFilePath = path.join(PDF_CACHE_DIR, `${fileId}.pdf`);
   if (fs.existsSync(cachedFilePath)) {
-    try {
-      const stats = fs.statSync(cachedFilePath);
-      if (stats.size > 0) return cachedFilePath;
-    } catch (_) {}
+    if (isValidPdfFile(cachedFilePath)) {
+      return cachedFilePath;
+    }
+    try { fs.unlinkSync(cachedFilePath); } catch (_) {}
   }
 
   if (pendingPdfDownloads.has(fileId)) {
@@ -372,9 +691,7 @@ async function ensurePdfCached(fileId, targetUrl, courseId, fallbackName) {
       }
       if (!dlUrl) throw new Error(`Cannot resolve download URL for fileId ${fileId}`);
 
-      if (dlUrl.startsWith('/')) {
-        dlUrl = new URL(dlUrl, cfg.baseUrl).toString();
-      }
+      dlUrl = normalizeCanvasFileUrl(dlUrl, cfg);
 
       const canvasHost = getCanvasHost(cfg);
       let urlHost = '';
@@ -420,6 +737,11 @@ async function ensurePdfCached(fileId, targetUrl, courseId, fallbackName) {
         fileStream.end((err) => (err ? reject(err) : resolve()));
       });
 
+      if (!isValidPdfFile(tempPath)) {
+        try { fs.unlinkSync(tempPath); } catch (_) {}
+        throw new Error('Downloaded file is not a valid PDF document');
+      }
+
       if (fs.existsSync(cachedFilePath)) {
         try { fs.unlinkSync(cachedFilePath); } catch (_) {}
       }
@@ -439,7 +761,57 @@ async function ensurePdfCached(fileId, targetUrl, courseId, fallbackName) {
   return downloadPromise;
 }
 
-// 10. ファイルダウンロードプロキシ（PDFインライン表示 / 直接ストリーミング）
+// 9.9 ファイルメタデータ解決エンドポイント（拡張子不明のCanvasファイルリンクの事前判定用）
+app.get('/api/files/meta', async (req, res) => {
+  try {
+    const { id, url, courseId, name } = req.query;
+    let fileId = id ? String(id).trim() : null;
+    let targetUrl = url ? String(url).trim() : null;
+    let targetCourseId = courseId ? String(courseId).trim() : null;
+
+    if (!fileId && targetUrl) {
+      const fMatch = targetUrl.match(/\/files\/(\d+)/);
+      if (fMatch) fileId = fMatch[1];
+      const cMatch = targetUrl.match(/\/courses\/(\d+)/);
+      if (cMatch && !targetCourseId) targetCourseId = cMatch[1];
+    }
+
+    let fileData = null;
+    if (fileId) {
+      try {
+        fileData = await canvasService.resolveFileDownload(fileId, targetCourseId);
+      } catch (_) {}
+    }
+
+    const displayName = normalizeDownloadFileName(name, fileData);
+    const contentType = resolveContentType(
+      displayName,
+      (fileData && (fileData['content-type'] || fileData.content_type)) || '',
+      displayName.toLowerCase().endsWith('.pdf'),
+      false
+    );
+
+    return res.json({
+      success: true,
+      id: fileId,
+      displayName,
+      filename: (fileData && (fileData.filename || fileData.display_name)) || displayName,
+      contentType,
+      size: fileData?.size || 0,
+      url: fileData?.url || targetUrl || null,
+      isLocked: Boolean(fileData?.locked_for_user || fileData?.hidden_for_user),
+      lockExplanation: fileData?.lock_explanation || fileData?.lock_info?.lock_explanation || null,
+      unlockAt: fileData?.unlock_at || fileData?.lock_info?.unlock_at || null
+    });
+  } catch (err) {
+    return res.json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+// 10. ファイルダウンロードプロキシ（PDF/画像/テキスト/メディアのインライン表示 & 直接ストリーミング）
 app.get('/api/files/download', async (req, res) => {
   try {
     const { url, id, name, inline, courseId } = req.query;
@@ -450,35 +822,49 @@ app.get('/api/files/download', async (req, res) => {
     const dispositionType = inline === 'true' ? 'inline' : 'attachment';
 
     // 0. fileId および courseId の抽出（未指定の場合、URL文字列から自動抽出）
-    const verifierParam = req.query.verifier ? String(req.query.verifier).trim() : null;
+    let verifierParam = req.query.verifier ? String(req.query.verifier).trim() : null;
 
-    if (!fileId && targetUrl) {
-      const fMatch = targetUrl.match(/\/files\/(\d+)/);
-      if (fMatch) fileId = fMatch[1];
-      const cMatch = targetUrl.match(/\/courses\/(\d+)/);
-      if (cMatch && !targetCourseId) targetCourseId = cMatch[1];
+    if (targetUrl) {
+      if (!fileId) {
+        const fMatch = targetUrl.match(/\/files\/(\d+)/);
+        if (fMatch) fileId = fMatch[1];
+      }
+      if (!targetCourseId) {
+        const cMatch = targetUrl.match(/\/courses\/(\d+)/);
+        if (cMatch) targetCourseId = cMatch[1];
+      }
+      if (!verifierParam) {
+        const vMatch = targetUrl.match(/[?&]verifier=([a-zA-Z0-9\-_]+)/);
+        if (vMatch) verifierParam = vMatch[1];
+      }
     }
 
-    // 1. キャッシュが存在する場合はローカルファイルを即座に返却（高速化・Range 206 要求にも完全対応）
+    if (fileName) {
+      fileName = normalizeDownloadFileName(fileName);
+    }
+
+    // 1. 有効なPDFキャッシュが存在する場合はローカルファイルを即座に返却（高速化・Range 206 要求にも完全対応）
     if (fileId) {
       const cachedFilePath = path.join(PDF_CACHE_DIR, `${fileId}.pdf`);
       if (fs.existsSync(cachedFilePath)) {
-        try {
-          const stats = fs.statSync(cachedFilePath);
-          if (stats.size > 0) {
-            const encName = encodeURIComponent(fileName || `${fileId}.pdf`);
+        if (isValidPdfFile(cachedFilePath)) {
+          try {
+            const pdfName = (fileName && fileName.toLowerCase().endsWith('.pdf')) ? fileName : `${fileId}.pdf`;
+            const encName = encodeURIComponent(pdfName);
             res.setHeader('Content-Type', 'application/pdf');
             res.setHeader('Content-Disposition', `${dispositionType}; filename*=UTF-8''${encName}`);
             res.setHeader('Cache-Control', 'public, max-age=86400');
             return res.sendFile(cachedFilePath, { acceptRanges: true });
-          }
-        } catch (cacheErr) {}
+          } catch (cacheErr) {}
+        } else {
+          try { fs.unlinkSync(cachedFilePath); } catch (_) {}
+        }
       }
     }
 
     const cfg = loadConfig();
 
-    // 2. fileId がある場合は Canvas Files API から署名付きダウンロードURLを最優先で解決
+    // 2. fileId がある場合は Canvas Files API から署名付きダウンロードURLと正確なファイル名を最優先で解決
     let fileData = null;
     if (fileId) {
       try {
@@ -486,65 +872,60 @@ app.get('/api/files/download', async (req, res) => {
         if (fileData?.url) {
           targetUrl = fileData.url;
         }
-        if (!fileName && (fileData?.display_name || fileData?.filename)) {
-          fileName = fileData.display_name || fileData.filename;
-        }
+        fileName = normalizeDownloadFileName(fileName, fileData);
       } catch (resolveErr) {
         console.warn(`Could not resolve fileId ${fileId} via Canvas API, falling back to direct URL:`, resolveErr.message);
       }
     }
 
-    // 3. targetUrl が相対パスの場合、Canvas baseUrl で絶対URLに補完
-    if (targetUrl && targetUrl.startsWith('/')) {
-      try {
-        targetUrl = new URL(targetUrl, cfg.baseUrl).toString();
-      } catch (e) {}
-    }
-
-    // 4. verifier パラメータがある場合はURLに補完
-    if (targetUrl && verifierParam) {
-      try {
-        const parsed = new URL(targetUrl);
-        if (!parsed.searchParams.has('verifier')) {
-          parsed.searchParams.set('verifier', verifierParam);
-          targetUrl = parsed.toString();
-        }
-      } catch (e) {}
-    }
-
-    // 5. Canvas Web画面のプレビュー用ラッパー (wrap=1) を除去し直接ダウンロード指定を付与
+    // 3〜5. 相対パス補完・verifier付与・wrap=1除去・download_frd=1付与
     if (targetUrl) {
-      try {
-        const parsed = new URL(targetUrl);
-        if (parsed.searchParams.has('wrap')) {
-          parsed.searchParams.delete('wrap');
-        }
-        if (parsed.pathname.includes('/files/') && !parsed.searchParams.has('download') && !parsed.searchParams.has('download_frd')) {
-          parsed.searchParams.set('download_frd', '1');
-        }
-        targetUrl = parsed.toString();
-      } catch (e) {}
+      targetUrl = normalizeCanvasFileUrl(targetUrl, cfg, verifierParam);
+    } else if (fileId && verifierParam && cfg.baseUrl) {
+      const base = cfg.baseUrl.replace(/\/+$/, '');
+      targetUrl = `${base}/files/${fileId}/download?download_frd=1&verifier=${encodeURIComponent(verifierParam)}`;
+    }
+
+    // ロックされているファイルでURLが存在しない場合は分かりやすい案内HTMLを返却（500エラー回避）
+    if (!targetUrl && fileData && (fileData.locked_for_user || fileData.hidden_for_user)) {
+      const lockMsg = fileData.lock_explanation || fileData.lock_info?.lock_explanation || 'このファイルは現在Canvas上でロックされています。';
+      if (inline === 'true') {
+        res.status(200).setHeader('Content-Type', 'text/html; charset=utf-8');
+        return res.send(`<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><style>body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#111420;color:#e2e8f0;font-family:sans-serif;padding:24px;box-sizing:border-box}.card{max-width:460px;background:#1a1f32;border:1px solid rgba(255,255,255,0.12);border-radius:16px;padding:28px;text-align:center;box-shadow:0 12px 32px rgba(0,0,0,0.4)}h3{margin:12px 0 8px;font-size:16px}p{margin:0;font-size:13.5px;color:#94a3b8;line-height:1.6}</style></head><body><div class="card"><div style="font-size:32px">🔒</div><h3>ファイルはロックされています</h3><p>${lockMsg.replace(/</g, '&lt;')}</p></div></body></html>`);
+      }
+      return res.status(403).send(lockMsg);
     }
 
     if (!targetUrl && !fileId) {
       return res.status(400).send('Download URL or File ID required');
     }
 
-    const encodedName = encodeURIComponent(fileName || 'document.pdf');
-    const isVideoRequest = (fileName && /\.(mp4|webm|mkv|mov|m4v|avi|ogv)$/i.test(fileName)) ||
-                           (targetUrl && /\.(mp4|webm|mkv|mov|m4v|avi|ogv)/i.test(targetUrl));
-    const isPdfRequest = (fileName && fileName.toLowerCase().endsWith('.pdf')) ||
-                         (targetUrl && targetUrl.toLowerCase().includes('.pdf')) ||
-                         (fileData && (fileData['content-type'] === 'application/pdf' || fileData.content_type === 'application/pdf')) ||
-                         (inline === 'true' && !isVideoRequest);
+    const effectiveName = fileName || 'document.pdf';
+    const extLower = path.extname(effectiveName).toLowerCase();
+    const fileDataMime = String((fileData && (fileData['content-type'] || fileData.content_type)) || '').toLowerCase();
+
+    const isVideoRequest = /\.(mp4|webm|mkv|mov|m4v|avi|ogv)$/i.test(effectiveName) ||
+                           Boolean(targetUrl && /\.(mp4|webm|mkv|mov|m4v|avi|ogv)(\?|$)/i.test(targetUrl)) ||
+                           fileDataMime.startsWith('video/');
+
+    const isKnownNonPdfExt = Boolean(extLower && extLower !== '.pdf' && EXT_TO_MIME[extLower]);
+    const isKnownNonPdfMime = Boolean(fileDataMime && !fileDataMime.includes('pdf') && !fileDataMime.includes('octet-stream'));
+
+    const isPdfRequest = !isKnownNonPdfExt && !isKnownNonPdfMime && (
+      extLower === '.pdf' ||
+      Boolean(targetUrl && /\.pdf(\?|$)/i.test(targetUrl)) ||
+      fileDataMime === 'application/pdf' ||
+      (inline === 'true' && !isVideoRequest)
+    );
 
     // 6. PDF かつ fileId がある場合、フルキャッシュを先行取得して Range 206 を完全サポート
     if (fileId && isPdfRequest) {
       try {
-        const cachedPath = await ensurePdfCached(fileId, targetUrl, targetCourseId, fileName);
+        const cachedPath = await ensurePdfCached(fileId, targetUrl, targetCourseId, effectiveName);
         if (fs.existsSync(cachedPath)) {
+          const encodedPdfName = encodeURIComponent(effectiveName.toLowerCase().endsWith('.pdf') ? effectiveName : `${effectiveName}.pdf`);
           res.setHeader('Content-Type', 'application/pdf');
-          res.setHeader('Content-Disposition', `${dispositionType}; filename*=UTF-8''${encodedName}`);
+          res.setHeader('Content-Disposition', `${dispositionType}; filename*=UTF-8''${encodedPdfName}`);
           res.setHeader('Cache-Control', 'public, max-age=86400');
           return res.sendFile(cachedPath, { acceptRanges: true });
         }
@@ -554,6 +935,10 @@ app.get('/api/files/download', async (req, res) => {
     }
 
     if (!targetUrl) {
+      if (inline === 'true') {
+        res.status(200).setHeader('Content-Type', 'text/html; charset=utf-8');
+        return res.send(`<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><style>body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#111420;color:#e2e8f0;font-family:sans-serif;padding:24px;box-sizing:border-box}.card{max-width:460px;background:#1a1f32;border:1px solid rgba(255,255,255,0.12);border-radius:16px;padding:28px;text-align:center}h3{margin:12px 0 8px;font-size:16px}p{margin:0;font-size:13.5px;color:#94a3b8;line-height:1.6}</style></head><body><div class="card"><h3>ファイルを読み込めませんでした</h3><p>Canvas上でアクセス制限されているか、URLが解決できませんでした。</p></div></body></html>`);
+      }
       return res.status(400).send('Download URL or File ID required');
     }
 
@@ -593,13 +978,12 @@ app.get('/api/files/download', async (req, res) => {
       return res.status(fileRes.status).send(`Failed to fetch file: ${fileRes.statusText}`);
     }
 
-    let contentType = fileRes.headers.get('content-type') || 'application/octet-stream';
-    if (isVideoRequest || contentType.startsWith('video/') || contentType === 'application/mp4') {
-      if (fileName && fileName.toLowerCase().endsWith('.webm')) contentType = 'video/webm';
-      else contentType = 'video/mp4';
-    } else if (isPdfRequest || contentType.includes('application/octet-stream')) {
-      contentType = 'application/pdf';
-    }
+    const respDisposition = fileRes.headers.get('content-disposition');
+    const respContentType = fileRes.headers.get('content-type') || 'application/octet-stream';
+    const finalFileName = normalizeDownloadFileName(fileName, fileData, respDisposition, respContentType);
+    const encodedName = encodeURIComponent(finalFileName);
+    const actualIsPdf = finalFileName.toLowerCase().endsWith('.pdf') || respContentType.includes('application/pdf');
+    const contentType = resolveContentType(finalFileName, respContentType, actualIsPdf, isVideoRequest);
 
     const contentLength = fileRes.headers.get('content-length');
     const contentRange = fileRes.headers.get('content-range');
@@ -613,8 +997,8 @@ app.get('/api/files/download', async (req, res) => {
     if (contentRange) res.setHeader('Content-Range', contentRange);
     res.setHeader('Cache-Control', 'public, max-age=86400');
 
-    // キャッシュ保存用ストリーム（PDFかつ全体リクエスト時のみ安全に書き込み）
-    const cachedFilePath = (fileId && isPdfRequest) ? path.join(PDF_CACHE_DIR, `${fileId}.pdf`) : null;
+    // キャッシュ保存用ストリーム（真にPDFかつ全体リクエスト時のみ安全に書き込み）
+    const cachedFilePath = (fileId && actualIsPdf) ? path.join(PDF_CACHE_DIR, `${fileId}.pdf`) : null;
     const cacheWriteStream = (cachedFilePath && !req.headers.range && fileRes.status === 200) ? fs.createWriteStream(cachedFilePath) : null;
 
     // ストリーミング転送（バックプレッシャー対応）
@@ -722,13 +1106,33 @@ app.get('/api/media/resolve', async (req, res) => {
   }
 });
 
-// 10.5 単体ファイルの直接保存（Downloads ディレクトリへ保存）
+// 10.5 単体ファイルの直接保存（Downloads ディレクトリへ適切な拡張子で保存）
 app.post('/api/files/download-single', async (req, res) => {
   try {
-    const { id, url, name, courseId } = req.body;
+    const { id, url, name, courseId, verifier } = req.body;
     const downloadsDir = path.join(os.homedir(), 'Downloads');
-    const rawName = name || 'file.pdf';
-    const safeFileName = rawName.replace(/[\\/:*?"<>|]/g, '_').slice(0, 150);
+    const rawName = name || 'download';
+    let safeFileName = normalizeDownloadFileName(rawName);
+
+    let fileId = id ? String(id).trim() : null;
+    let targetCourseId = courseId ? String(courseId).trim() : null;
+    let targetVerifier = verifier ? String(verifier).trim() : null;
+
+    if (url) {
+      const urlStr = String(url);
+      if (!fileId) {
+        const fMatch = urlStr.match(/\/files\/(\d+)/) || urlStr.match(/[?&]id=(\d+)/);
+        if (fMatch) fileId = fMatch[1];
+      }
+      if (!targetCourseId) {
+        const cMatch = urlStr.match(/\/courses\/(\d+)/) || urlStr.match(/[?&]courseId=(\d+)/);
+        if (cMatch) targetCourseId = cMatch[1];
+      }
+      if (!targetVerifier) {
+        const vMatch = urlStr.match(/[?&]verifier=([a-zA-Z0-9\-_]+)/);
+        if (vMatch) targetVerifier = vMatch[1];
+      }
+    }
 
     const job = {
       id: `single-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -738,6 +1142,7 @@ app.post('/api/files/download-single', async (req, res) => {
       progress: 0,
       saveDir: downloadsDir,
       fileName: safeFileName,
+      fullPath: path.join(downloadsDir, safeFileName),
       message: 'ダウンロードを開始中...',
       createdAt: Date.now(),
       error: null
@@ -751,12 +1156,25 @@ app.post('/api/files/download-single', async (req, res) => {
       const hostHeader = req.get('host') || (`127.0.0.1:${currentPort || PORT}`);
       const localOrigin = `${req.protocol || 'http'}://${hostHeader}`;
       let downloadUrl = url || null;
+      let resolvedFileData = null;
 
-      // 相対URL（自前プロキシ /api/files/download など）を完全なURLに変換
+      // 1. fileId がある場合は Canvas Files API から署名付きダウンロードURLと本来のファイル名・拡張子を最優先で解決
+      if (fileId) {
+        try {
+          resolvedFileData = await canvasService.resolveFileDownload(fileId, targetCourseId);
+          if (resolvedFileData?.url) {
+            downloadUrl = resolvedFileData.url;
+          }
+          safeFileName = normalizeDownloadFileName(rawName, resolvedFileData);
+          job.title = safeFileName;
+          job.fileName = safeFileName;
+        } catch (e) {}
+      }
+
+      // 2. 相対URL（自前プロキシ /api/files/download など）を完全なURLに変換
       if (downloadUrl && downloadUrl.startsWith('/')) {
         try {
           const parsedLocal = new URL(downloadUrl, localOrigin);
-          // ダウンロード用に inline=true は除去
           if (parsedLocal.searchParams.get('inline') === 'true') {
             parsedLocal.searchParams.delete('inline');
           }
@@ -766,23 +1184,29 @@ app.post('/api/files/download-single', async (req, res) => {
         }
       }
 
+      // 3. Canvas API エンドポイントURLの場合、JSONから実体URLを取得
       if (downloadUrl && downloadUrl.includes('/api/v1/')) {
         try {
           const fData = await canvasService.fetchJson(downloadUrl);
-          if (fData?.url) downloadUrl = fData.url;
+          if (fData) {
+            resolvedFileData = resolvedFileData || fData;
+            if (fData.url) downloadUrl = fData.url;
+            safeFileName = normalizeDownloadFileName(rawName, resolvedFileData);
+            job.title = safeFileName;
+            job.fileName = safeFileName;
+          }
         } catch (e) {}
       }
 
-      if (!downloadUrl && id) {
-        try {
-          const resolved = await canvasService.resolveFileDownload(id, courseId);
-          downloadUrl = resolved?.url;
-        } catch (e) {}
+      // 4. Canvas Web画面 URL (/courses/.../files/...?wrap=1) の正規化（wrap=1除去・download_frd=1・verifier付与）
+      if (downloadUrl && !downloadUrl.startsWith(localOrigin)) {
+        downloadUrl = normalizeCanvasFileUrl(downloadUrl, cfg, targetVerifier);
       }
 
-      if (!downloadUrl && id && cfg.baseUrl) {
+      if (!downloadUrl && fileId && cfg.baseUrl) {
         const baseUrl = cfg.baseUrl.replace(/\/+$/, '');
-        downloadUrl = `${baseUrl}/files/${id}/download?download_frd=1`;
+        const vQuery = targetVerifier ? `&verifier=${encodeURIComponent(targetVerifier)}` : '';
+        downloadUrl = `${baseUrl}/files/${fileId}/download?download_frd=1${vQuery}`;
       }
 
       if (!downloadUrl) throw new Error('ダウンロードURLを取得できませんでした');
@@ -791,7 +1215,6 @@ app.post('/api/files/download-single', async (req, res) => {
       try { urlHost = new URL(downloadUrl).host; } catch (e) {}
 
       const headers = {};
-      // 自サーバープロキシ宛て（ローカル）の場合はCanvas認証ヘッダーは不要（プロキシ内部で付与）
       if (urlHost && urlHost === canvasHost) {
         headers['Authorization'] = `Bearer ${cfg.apiToken}`;
       }
@@ -816,6 +1239,17 @@ app.post('/api/files/download-single', async (req, res) => {
 
       if (!fileRes.ok) throw new Error(`HTTP ${fileRes.status}`);
 
+      // レスポンスヘッダー (Content-Disposition / Content-Type) から最終ファイル名と拡張子を確定
+      const respDisposition = fileRes.headers.get('content-disposition');
+      const respContentType = fileRes.headers.get('content-type') || '';
+      safeFileName = normalizeDownloadFileName(rawName, resolvedFileData, respDisposition, respContentType);
+      job.title = safeFileName;
+
+      // HTMLログイン画面の誤保存を防止
+      if (respContentType.includes('text/html') && !/\.html?$/i.test(safeFileName)) {
+        throw new Error('Canvasの認証またはファイルアクセス権限がありません');
+      }
+
       let finalPath = path.join(downloadsDir, safeFileName);
       let counter = 1;
       const ext = path.extname(safeFileName);
@@ -839,7 +1273,10 @@ app.post('/api/files/download-single', async (req, res) => {
         }
         const { done, value } = await reader.read();
         if (done) break;
-        fileStream.write(Buffer.from(value));
+        const canWrite = fileStream.write(Buffer.from(value));
+        if (!canWrite) {
+          await new Promise((resolve) => fileStream.once('drain', resolve));
+        }
         downloadedSize += value.length;
         if (totalSize > 0) {
           job.progress = Math.min(99, Math.round((downloadedSize / totalSize) * 100));
@@ -850,11 +1287,12 @@ app.post('/api/files/download-single', async (req, res) => {
           job.progress = 50;
         }
       }
-      fileStream.end();
+      await new Promise((resolve) => fileStream.end(resolve));
 
       job.status = 'completed';
       job.progress = 100;
       job.fileName = path.basename(finalPath);
+      job.fullPath = finalPath;
       job.saveDir = downloadsDir;
       job.message = `保存完了: ${path.basename(finalPath)}`;
     })().catch(err => {
@@ -871,7 +1309,7 @@ app.post('/api/files/download-single', async (req, res) => {
   }
 });
 
-// 11. 複数ファイルの一括保存（Downloads ディレクトリへ保存）
+// 11. 複数ファイルの一括保存（Downloads ディレクトリへ適切な拡張子で保存）
 app.post('/api/files/download-batch', async (req, res) => {
   try {
     const { files, title, folderName, targetDir } = req.body;
@@ -919,7 +1357,7 @@ app.post('/api/files/download-batch', async (req, res) => {
         if (job.status === 'cancelled') break;
         const item = files[i];
         const rawName = item.name || item.displayName || `file_${i + 1}`;
-        const safeFileName = rawName.replace(/[\\/:*?"<>|]/g, '_').slice(0, 150);
+        let safeFileName = normalizeDownloadFileName(rawName);
         job.currentFileName = safeFileName;
         job.message = `${i + 1}/${files.length} 件目を保存中: ${safeFileName}`;
 
@@ -927,6 +1365,19 @@ app.post('/api/files/download-batch', async (req, res) => {
           const hostHeader = req.get('host') || (`127.0.0.1:${currentPort || PORT}`);
           const localOrigin = `${req.protocol || 'http'}://${hostHeader}`;
           let downloadUrl = item.url || null;
+          let resolvedFileData = null;
+
+          // item.id がある場合は Canvas Files API から署名付きダウンロードURLと本来のファイル名・拡張子を解決
+          if (item.id) {
+            try {
+              resolvedFileData = await canvasService.resolveFileDownload(item.id, item.courseId);
+              if (resolvedFileData?.url) {
+                downloadUrl = resolvedFileData.url;
+              }
+              safeFileName = normalizeDownloadFileName(rawName, resolvedFileData);
+              job.currentFileName = safeFileName;
+            } catch (resolveErr) {}
+          }
 
           if (downloadUrl && downloadUrl.startsWith('/')) {
             try {
@@ -944,22 +1395,20 @@ app.post('/api/files/download-batch', async (req, res) => {
           if (downloadUrl && downloadUrl.includes('/api/v1/')) {
             try {
               const fileData = await canvasService.fetchJson(downloadUrl);
-              if (fileData?.url) {
-                downloadUrl = fileData.url;
+              if (fileData) {
+                resolvedFileData = resolvedFileData || fileData;
+                if (fileData.url) {
+                  downloadUrl = fileData.url;
+                }
+                safeFileName = normalizeDownloadFileName(rawName, resolvedFileData);
               }
             } catch (apiErr) {
               console.warn(`Could not resolve API URL for ${safeFileName}:`, apiErr.message);
             }
           }
 
-          // item.id からの最新ダウンロードURL解決
-          if (!downloadUrl && item.id) {
-            try {
-              const resolved = await canvasService.resolveFileDownload(item.id, item.courseId);
-              downloadUrl = resolved?.url;
-            } catch (resolveErr) {
-              console.warn(`Failed to resolve download URL for item ${item.id}:`, resolveErr.message);
-            }
+          if (downloadUrl && !downloadUrl.startsWith(localOrigin)) {
+            downloadUrl = normalizeCanvasFileUrl(downloadUrl, cfg);
           }
 
           // 最後のフォールバック（Canvasの直接ダウンロードURL構造）
@@ -1001,9 +1450,11 @@ app.post('/api/files/download-batch', async (req, res) => {
 
           if (!fileRes.ok) throw new Error(`HTTP ${fileRes.status}`);
 
-          // HTML（Canvasログイン画面など）が返っていないか検知
+          // HTML（Canvasログイン画面など）が返っていないか検知 & Content-Disposition から正確な拡張子を補完
           const contentType = fileRes.headers.get('content-type') || '';
-          if (contentType.includes('text/html') && !safeFileName.toLowerCase().endsWith('.html')) {
+          const respDisposition = fileRes.headers.get('content-disposition');
+          safeFileName = normalizeDownloadFileName(rawName, resolvedFileData, respDisposition, contentType);
+          if (contentType.includes('text/html') && !/\.html?$/i.test(safeFileName)) {
             throw new Error('Canvasの認証またはファイルアクセス権限がありません (ログイン画面が返却されました)');
           }
 
@@ -1446,7 +1897,19 @@ function startServer(port = PORT) {
   });
 }
 
-module.exports = { app, startServer, PORT, compareSemver, PDF_CACHE_DIR, ensurePdfCached };
+module.exports = {
+  app,
+  startServer,
+  PORT,
+  compareSemver,
+  PDF_CACHE_DIR,
+  ensurePdfCached,
+  normalizeDownloadFileName,
+  extractFilenameFromContentDisposition,
+  isValidPdfFile,
+  resolveContentType,
+  normalizeCanvasFileUrl
+};
 
 if (require.main === module) {
   startServer();

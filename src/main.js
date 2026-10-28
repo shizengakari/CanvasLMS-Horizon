@@ -61,13 +61,28 @@ if (!gotTheLock) {
     }
   });
 
-  // レンダリング最適化フラグの設定（バックグラウンドスロットリングを有効化してバッテリーを保護）
+  // レンダリング最適化および省電力・低リソース化フラグの設定
   app.commandLine.appendSwitch('ignore-gpu-blocklist');
   app.commandLine.appendSwitch('enable-gpu-rasterization');
   app.commandLine.appendSwitch('enable-zero-copy');
   app.commandLine.appendSwitch('enable-features', 'CanvasOopRasterization,SmoothScrolling,ResourceLoadScheduler');
   app.commandLine.appendSwitch('disable-background-timer-throttling', 'false');
   app.commandLine.appendSwitch('disable-backgrounding-occluded-windows', 'false');
+  app.commandLine.appendSwitch('disable-background-networking');
+  app.commandLine.appendSwitch('disable-component-update');
+  app.commandLine.appendSwitch('disable-domain-reliability');
+  app.commandLine.appendSwitch('disable-sync');
+  app.commandLine.appendSwitch('disable-default-apps');
+  app.commandLine.appendSwitch('no-pings');
+  app.commandLine.appendSwitch('js-flags', '--optimize-for-size');
+
+  // ExpressサーバーをChromium初期化と並行して先行起動し、起動待ち時間をゼロ化
+  const serverBootPromise = startServer(PORT).then((srv) => {
+    serverInstance = srv;
+    actualPort = srv.address().port;
+    console.log(`API Server running at port ${actualPort}`);
+    return srv;
+  });
 
   async function createWindow() {
     try {
@@ -90,6 +105,7 @@ if (!gotTheLock) {
           nodeIntegration: false,
           contextIsolation: true,
           backgroundThrottling: true, // バックグラウンド時に適切にスロットリングしてCPU・バッテリー消費を大幅削減
+          spellcheck: false, // 不要なスペルチェック辞書メモリ消費を削減
           plugins: true,
           preload: path.join(__dirname, 'preload.js')
         },
@@ -100,12 +116,25 @@ if (!gotTheLock) {
       mainWindow.setMenuBarVisibility(false);
       mainWindow.removeMenu();
 
-      // 開発・ローカル実行時はHTTPキャッシュをクリアして常に最新コードを確実に反映
-      if (!app.isPackaged) {
+      // ウィンドウ最小化・非フォーカス時のフレームレート制御によるバッテリー・GPU負荷低減
+      const updateWindowFrameRate = () => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
         try {
-          await mainWindow.webContents.session.clearCache();
+          if (mainWindow.isMinimized() || !mainWindow.isVisible()) {
+            mainWindow.webContents.setFrameRate(1);
+          } else if (!mainWindow.isFocused()) {
+            mainWindow.webContents.setFrameRate(15);
+          } else if (powerMonitor.isOnBatteryPower()) {
+            mainWindow.webContents.setFrameRate(45);
+          } else {
+            mainWindow.webContents.setFrameRate(60);
+          }
         } catch (_) {}
-      }
+      };
+      mainWindow.on('minimize', updateWindowFrameRate);
+      mainWindow.on('restore', updateWindowFrameRate);
+      mainWindow.on('blur', updateWindowFrameRate);
+      mainWindow.on('focus', updateWindowFrameRate);
 
       // 開発・テスト時のショートカット（F5 / Ctrl+R でキャッシュ無視リロード、F12 で DevTools）
       mainWindow.webContents.on('before-input-event', (event, input) => {
@@ -126,10 +155,11 @@ if (!gotTheLock) {
 
       let isShown = false;
       const showWindow = () => {
-        if (!isShown && mainWindow) {
+        if (!isShown && mainWindow && !mainWindow.isDestroyed()) {
           isShown = true;
           mainWindow.show();
           mainWindow.focus();
+          updateWindowFrameRate();
         }
       };
 
@@ -141,7 +171,7 @@ if (!gotTheLock) {
           }, 3000);
         }
       });
-      setTimeout(showWindow, 600);
+      setTimeout(showWindow, 350);
 
       // 読み込み失敗時の再試行
       mainWindow.webContents.on('did-fail-load', () => {
@@ -500,9 +530,7 @@ del "${pendingAsarUpdate.pendingFile}" >nul 2>&1
 
   app.whenReady().then(async () => {
     try {
-      serverInstance = await startServer(PORT);
-      actualPort = serverInstance.address().port;
-      console.log(`API Server running at port ${actualPort}`);
+      await serverBootPromise;
       await createWindow();
     } catch (err) {
       console.error('Failed to start server:', err);

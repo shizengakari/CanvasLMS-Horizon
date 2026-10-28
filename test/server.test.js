@@ -329,6 +329,72 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     // 2. JS の visibilitychange で app-hidden クラスがトグルされること
     assert.ok(js.includes("classList.toggle('app-hidden'"), 'Should toggle app-hidden class on visibilitychange');
   });
+
+  it('should preserve true extensions (.docx, .pptx, .xlsx, .zip) and strip accidental .docx.pdf double extensions', () => {
+    const {
+      normalizeDownloadFileName,
+      normalizeCanvasFileUrl,
+      isValidPdfFile
+    } = require('../src/server');
+
+    // 1. .docx.pdf の二重拡張子を .docx に正規化
+    assert.strictEqual(
+      normalizeDownloadFileName('第9回課題_GIシート-1.docx.pdf', null, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+      '第9回課題_GIシート-1.docx'
+    );
+
+    // 2. 拡張子なしのリンク名でも fileData.displayName や Content-Disposition から .docx を復元
+    assert.strictEqual(
+      normalizeDownloadFileName('第9回課題_GIシート', { displayName: '第9回課題_GIシート-1.docx' }),
+      '第9回課題_GIシート.docx'
+    );
+    assert.strictEqual(
+      normalizeDownloadFileName(
+        '配付資料',
+        null,
+        "attachment; filename*=UTF-8''%E7%AC%AC9%E5%9B%9E%E8%AA%B2%E9%A1%8C_GI%E3%82%B7%E3%83%BC%E3%83%88-1.docx",
+        'application/octet-stream'
+      ),
+      '配付資料.docx'
+    );
+
+    // 3. Canvas の ?wrap=1 付きウェブURLを直接ダウンロードURLへ正規化（verifier維持）
+    const normalizedUrl = normalizeCanvasFileUrl('https://canvas.example.edu/courses/123/files/45678?wrap=1&verifier=abc123xyz');
+    assert.ok(!normalizedUrl.includes('wrap=1'), 'Should strip wrap=1');
+    assert.ok(normalizedUrl.includes('verifier=abc123xyz'), 'Should preserve verifier parameter');
+    assert.ok(normalizedUrl.includes('download_frd=1'), 'Should append download_frd=1');
+
+    // 4. 非PDFファイル（ZIP/DOCXヘッダー PK\x03\x04）が PDF_CACHE_DIR に混入していた場合に検出し自動排除すること
+    const fakePdfPath = path.join(PDF_CACHE_DIR, 'fake_docx_99999.pdf');
+    fs.writeFileSync(fakePdfPath, Buffer.from('PK\x03\x04 Fake DOCX content'));
+    assert.strictEqual(isValidPdfFile(fakePdfPath), false, 'Should detect non-PDF header');
+    assert.strictEqual(fs.existsSync(fakePdfPath), false, 'Should purge corrupted non-PDF file from PDF_CACHE_DIR');
+  });
+
+  it('should not force data-api-returntype="File" links into PDF viewer and should implement modalNav back stack', async () => {
+    const [htmlRes, cssRes, jsRes] = await Promise.all([
+      fetch(`${baseUrl}/`),
+      fetch(`${baseUrl}/css/style.css`),
+      fetch(`${baseUrl}/js/app.js`)
+    ]);
+    const html = await htmlRes.text();
+    const css = await cssRes.text();
+    const js = await jsRes.text();
+
+    // 1. data-api-returntype === 'File' が無条件に isPdf 判定に使われていないこと
+    assert.ok(!js.includes("title.toLowerCase().includes('.pdf') ||\n                  link.dataset.apiReturntype === 'File'"), 'Should not treat all Canvas File links as PDF');
+    assert.ok(js.includes('classifyFile('), 'Should classify files by extension and MIME type');
+
+    // 2. モーダル間の画面切り替え・戻るナビゲーション (modalNav & .modal-back-btn) が実装されていること
+    assert.ok(html.includes('class="modal-back-btn"'), 'Modals should include modal-back-btn in header');
+    assert.ok(css.includes('.modal-back-btn'), 'CSS should style modal-back-btn');
+    assert.ok(js.includes('const modalNav ='), 'JS should define modalNav stack manager');
+    assert.ok(js.includes('modalNav.goBack()'), 'JS should support stepping back to previous modal');
+
+    // 3. ロックされたページ・課題の案内表示 (.locked-content-notice) が実装されていること
+    assert.ok(css.includes('.locked-content-notice'), 'CSS should style locked-content-notice');
+    assert.ok(js.includes('renderLockedContentNotice'), 'JS should render locked content notice');
+  });
 });
 
 

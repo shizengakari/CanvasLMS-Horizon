@@ -57,4 +57,29 @@ describe('CanvasService Cache & Performance Whitebox Tests', () => {
     assert.strictEqual(canvasService.cache.allAssignments, null);
     assert.strictEqual(canvasService.cache.groupedMaterials.size, 0);
   });
+
+  it('should decode already-encoded pageUrl slugs in getPage and return lock metadata', async () => {
+    const origFetchJson = canvasService.fetchJson;
+    let requestedEndpoint = null;
+    canvasService.fetchJson = async (endpoint) => {
+      requestedEndpoint = endpoint;
+      return {
+        title: '講義資料 Wk. 2',
+        body: '',
+        html_url: 'https://canvas.example.edu/courses/10/pages/wk2',
+        locked_for_user: true,
+        lock_explanation: 'このページは 10月 8日 13:30 にロックされました。'
+      };
+    };
+
+    try {
+      const encodedSlug = encodeURIComponent('講義資料-wk-2');
+      const page = await canvasService.getPage('10', encodedSlug);
+      assert.strictEqual(requestedEndpoint, `/api/v1/courses/10/pages/${encodedSlug}`, 'Should not double-encode already encoded pageUrl');
+      assert.strictEqual(page.lockedForUser, true);
+      assert.strictEqual(page.lockExplanation, 'このページは 10月 8日 13:30 にロックされました。');
+    } finally {
+      canvasService.fetchJson = origFetchJson;
+    }
+  });
 });

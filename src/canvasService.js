@@ -159,18 +159,21 @@ class CanvasService {
             this.cache.courses = parsed.courses;
             this.cache.coursesTime = parsed.coursesTime || 0;
           }
-          if (Array.isArray(parsed.allAssignments)) {
-            this.cache.allAssignments = parsed.allAssignments;
-            this.cache.allAssignmentsTime = parsed.allAssignmentsTime || 0;
-          }
-          if (parsed.assignments && typeof parsed.assignments === 'object') {
-            for (const [k, v] of Object.entries(parsed.assignments)) {
-              this.cache.assignments.set(k, v);
+          // スキーマバージョンが一致する場合のみ詳細キャッシュを復元（ロック情報・URL正規化の整合性保証）
+          if (parsed.schemaVersion === 2) {
+            if (Array.isArray(parsed.allAssignments)) {
+              this.cache.allAssignments = parsed.allAssignments;
+              this.cache.allAssignmentsTime = parsed.allAssignmentsTime || 0;
             }
-          }
-          if (parsed.groupedMaterials && typeof parsed.groupedMaterials === 'object') {
-            for (const [k, v] of Object.entries(parsed.groupedMaterials)) {
-              this.cache.groupedMaterials.set(k, v);
+            if (parsed.assignments && typeof parsed.assignments === 'object') {
+              for (const [k, v] of Object.entries(parsed.assignments)) {
+                this.cache.assignments.set(k, v);
+              }
+            }
+            if (parsed.groupedMaterials && typeof parsed.groupedMaterials === 'object') {
+              for (const [k, v] of Object.entries(parsed.groupedMaterials)) {
+                this.cache.groupedMaterials.set(k, v);
+              }
             }
           }
         }
@@ -194,6 +197,7 @@ class CanvasService {
           groupedMaterialsObj[k] = v;
         }
         const data = {
+          schemaVersion: 2,
           profile: this.cache.profile,
           courses: this.cache.courses,
           coursesTime: this.cache.coursesTime,
@@ -202,11 +206,14 @@ class CanvasService {
           assignments: assignmentsObj,
           groupedMaterials: groupedMaterialsObj
         };
-        fs.writeFileSync(this.cacheFilePath, JSON.stringify(data), 'utf-8');
+        fs.promises.writeFile(this.cacheFilePath, JSON.stringify(data), 'utf-8').catch(() => {});
       } catch (e) {
         console.warn('Failed to save disk cache:', e.message);
       }
     }, 800);
+    if (this._saveCacheTimer && this._saveCacheTimer.unref) {
+      this._saveCacheTimer.unref();
+    }
   }
 
   // 全キャッシュのクリア（メモリ・ディスク両方）
@@ -641,6 +648,7 @@ class CanvasService {
             title: it.title,
             type: it.type, // 'File', 'Assignment', 'Page', 'ExternalUrl', 'Quiz' など
             contentId: it.content_id,
+            pageUrl: it.page_url || null,
             htmlUrl: it.html_url,
             url: it.url, // ファイル解決用API URL
             externalUrl: it.external_url || null,
@@ -650,7 +658,7 @@ class CanvasService {
             isLocked: isItemLocked,
             lockInfo: it.lock_info || null,
             unlockAt: itemUnlockAt,
-            lockExplanation: it.lock_info?.lock_explanation || null
+            lockExplanation: it.lock_explanation || it.lock_info?.lock_explanation || null
           };
         })
       };
@@ -680,11 +688,16 @@ class CanvasService {
           fileMap.set(String(f.id), {
             id: f.id,
             displayName: f.display_name || f.filename,
+            filename: f.filename || f.display_name,
             size: f.size,
             contentType: f['content-type'] || f.content_type,
-            url: f.url,
+            url: f.url || null,
             createdAt: f.created_at,
             updatedAt: f.updated_at,
+            isLocked: Boolean(f.locked_for_user || f.hidden_for_user),
+            lockedForUser: Boolean(f.locked_for_user),
+            unlockAt: f.unlock_at || f.lock_info?.unlock_at || null,
+            lockExplanation: f.lock_explanation || f.lock_info?.lock_explanation || null,
             source: 'files'
           });
         });
@@ -703,13 +716,17 @@ class CanvasService {
             contentId: it.contentId,
             title: it.title,
             url: it.url,
-            moduleName: m.name
+            moduleName: m.name,
+            isLocked: it.isLocked,
+            lockedForUser: it.lockedForUser,
+            unlockAt: it.unlockAt,
+            lockExplanation: it.lockExplanation
           });
         }
       });
     });
 
-    // モジュール内ファイルを並列解決（最大15件ずつバッチ処理）
+    // モジュール内ファイルを並列解決（最大10件ずつバッチ処理）
     const batchSize = 10;
     for (let i = 0; i < fileItems.length; i += batchSize) {
       const batch = fileItems.slice(i, i + batchSize);
@@ -717,14 +734,20 @@ class CanvasService {
         try {
           if (item.url) {
             const fData = await this.fetchJson(item.url);
+            const resolvedName = fData.display_name || fData.filename || item.title;
             fileMap.set(String(item.contentId), {
               id: item.contentId,
-              displayName: fData.display_name || item.title,
+              displayName: resolvedName,
+              filename: fData.filename || resolvedName,
               size: fData.size || 0,
-              contentType: fData['content-type'] || (item.title.endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream'),
-              url: fData.url,
+              contentType: fData['content-type'] || fData.content_type || (resolvedName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream'),
+              url: fData.url || null,
               createdAt: fData.created_at || null,
               updatedAt: fData.updated_at || null,
+              isLocked: Boolean(fData.locked_for_user || fData.hidden_for_user || item.isLocked),
+              lockedForUser: Boolean(fData.locked_for_user || item.lockedForUser),
+              unlockAt: fData.unlock_at || fData.lock_info?.unlock_at || item.unlockAt || null,
+              lockExplanation: fData.lock_explanation || fData.lock_info?.lock_explanation || item.lockExplanation || null,
               moduleName: item.moduleName,
               source: 'module'
             });
@@ -734,9 +757,14 @@ class CanvasService {
           fileMap.set(String(item.contentId), {
             id: item.contentId,
             displayName: item.title,
+            filename: item.title,
             size: 0,
-            contentType: item.title.endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream',
+            contentType: item.title.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream',
             url: null,
+            isLocked: Boolean(item.isLocked),
+            lockedForUser: Boolean(item.lockedForUser),
+            unlockAt: item.unlockAt || null,
+            lockExplanation: item.lockExplanation || null,
             moduleName: item.moduleName,
             source: 'module'
           });
@@ -792,25 +820,41 @@ class CanvasService {
 
         if (it.type === 'File') {
           const resolved = fileMapById.get(String(it.contentId)) || {};
+          const resolvedDisplayName = resolved.displayName || it.title;
           moduleFiles.push({
             id: it.contentId,
             itemId: it.id,
             title: it.title,
-            displayName: resolved.displayName || it.title,
+            displayName: resolvedDisplayName,
+            filename: resolved.filename || resolvedDisplayName,
             size: resolved.size || 0,
-            contentType: resolved.contentType || (it.title.endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream'),
+            contentType: resolved.contentType || (resolvedDisplayName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream'),
             url: resolved.url || null,
             type: 'File',
             htmlUrl: it.htmlUrl,
-            ...commonProps
+            ...commonProps,
+            isLocked: Boolean(it.isLocked || resolved.isLocked || resolved.lockedForUser),
+            lockedForUser: Boolean(it.lockedForUser || resolved.lockedForUser),
+            unlockAt: resolved.unlockAt || it.unlockAt || null,
+            lockExplanation: resolved.lockExplanation || it.lockExplanation || null
           });
         } else if (it.type === 'Page') {
+          let rawPageUrl = it.pageUrl || it.page_url || (it.url ? it.url.split('/').pop() : null);
+          if (rawPageUrl) {
+            try {
+              for (let i = 0; i < 2; i++) {
+                const dec = decodeURIComponent(rawPageUrl);
+                if (dec === rawPageUrl) break;
+                rawPageUrl = dec;
+              }
+            } catch (_) {}
+          }
           moduleFiles.push({
             id: it.contentId || it.id,
             itemId: it.id,
             title: it.title,
             type: 'Page',
-            pageUrl: it.page_url || (it.url ? it.url.split('/').pop() : null),
+            pageUrl: rawPageUrl,
             apiUrl: it.url,
             htmlUrl: it.htmlUrl,
             ...commonProps
@@ -825,7 +869,8 @@ class CanvasService {
             title: it.title,
             type: 'Assignment',
             assignmentId: it.contentId || it.id,
-            htmlUrl: it.htmlUrl,
+            description: assign?.description || '',
+            htmlUrl: assign?.htmlUrl || it.htmlUrl,
             isSubmitted: assign ? Boolean(assign.isSubmitted) : false,
             isGraded: assign ? Boolean(assign.isGraded) : false,
             dueAt: assign?.dueAt || null,
@@ -833,7 +878,20 @@ class CanvasService {
             submission: assign?.submission || null,
             submissionTypes: assign?.submissionTypes || ['online_upload'],
             ...commonProps,
-            isLocked: Boolean(it.isLocked || assign?.isLocked)
+            isLocked: Boolean(it.isLocked || assign?.isLocked),
+            unlockAt: assign?.unlockAt || it.unlockAt || null,
+            lockExplanation: assign?.lockExplanation || it.lockExplanation || null
+          });
+        } else if (it.type === 'Discussion' || it.type === 'DiscussionTopic') {
+          moduleFiles.push({
+            id: it.contentId || it.id,
+            itemId: it.id,
+            title: it.title,
+            type: 'Discussion',
+            topicId: it.contentId || it.id,
+            url: it.url,
+            htmlUrl: it.htmlUrl,
+            ...commonProps
           });
         } else if (it.type === 'ExternalUrl') {
           moduleFiles.push({
@@ -845,7 +903,7 @@ class CanvasService {
             htmlUrl: it.htmlUrl,
             ...commonProps
           });
-        } else {
+        } else if (it.type !== 'SubHeader') {
           moduleFiles.push({
             id: it.contentId || it.id,
             itemId: it.id,
@@ -888,12 +946,42 @@ class CanvasService {
           id: f.id,
           title: f.displayName,
           displayName: f.displayName,
+          filename: f.filename || f.displayName,
           size: f.size,
           contentType: f.contentType,
           url: f.url,
+          isLocked: Boolean(f.isLocked),
+          lockedForUser: Boolean(f.lockedForUser),
+          unlockAt: f.unlockAt || null,
+          lockExplanation: f.lockExplanation || null,
           type: 'File'
         }))
       });
+    }
+
+    // モジュールもファイルも0件のコースの場合、Wikiページ一覧またはフロントページをフォールバック探索
+    if (grouped.length === 0) {
+      try {
+        const pages = await this.fetchJson(`/api/v1/courses/${courseId}/pages?per_page=50`);
+        if (Array.isArray(pages) && pages.length > 0) {
+          grouped.push({
+            id: 'course_pages',
+            name: '講義ページ・ノート',
+            position: 1,
+            items: pages.map(p => ({
+              id: p.page_id || p.url,
+              itemId: p.page_id || p.url,
+              title: p.title || p.url,
+              type: 'Page',
+              pageUrl: p.url,
+              htmlUrl: p.html_url,
+              isLocked: Boolean(p.locked_for_user),
+              lockedForUser: Boolean(p.locked_for_user),
+              lockExplanation: p.lock_explanation || null
+            }))
+          });
+        }
+      } catch (_) {}
     }
 
     this.setLru(this.cache.groupedMaterials, cacheKey, { time: now, data: grouped });
@@ -903,12 +991,39 @@ class CanvasService {
 
   // 講義ページ（Wikiページ）の本文を取得（Canvas LMSを開かずにアプリ内で全文表示）
   async getPage(courseId, pageUrl) {
-    const data = await this.fetchJson(`/api/v1/courses/${courseId}/pages/${encodeURIComponent(pageUrl)}`);
+    let cleanSlug = String(pageUrl || '').trim();
+    try {
+      for (let i = 0; i < 3; i++) {
+        const dec = decodeURIComponent(cleanSlug);
+        if (dec === cleanSlug) break;
+        cleanSlug = dec;
+      }
+    } catch (_) {}
+
+    const data = await this.fetchJson(`/api/v1/courses/${courseId}/pages/${encodeURIComponent(cleanSlug)}`);
     return {
       title: data.title,
-      body: data.body,
+      body: data.body || '',
       updatedAt: data.updated_at,
-      url: data.html_url
+      url: data.html_url,
+      lockedForUser: Boolean(data.locked_for_user),
+      lockExplanation: data.lock_explanation || data.lock_info?.lock_explanation || null,
+      unlockAt: data.unlock_at || data.lock_info?.unlock_at || null,
+      lockAt: data.lock_info?.lock_at || null
+    };
+  }
+
+  // ディスカッショントピックの本文を取得
+  async getDiscussion(courseId, topicId) {
+    const data = await this.fetchJson(`/api/v1/courses/${courseId}/discussion_topics/${encodeURIComponent(topicId)}`);
+    return {
+      title: data.title || 'ディスカッション',
+      body: data.message || '',
+      updatedAt: data.posted_at || data.last_reply_at || null,
+      url: data.html_url || null,
+      author: data.user_name || (data.author ? data.author.display_name : null),
+      lockedForUser: Boolean(data.locked_for_user),
+      lockExplanation: data.lock_explanation || data.lock_info?.lock_explanation || null
     };
   }
 
@@ -921,13 +1036,19 @@ class CanvasService {
       return cached.data;
     }
 
-    // ファイル詳細APIから最新の署名付きURLを取得
-    const endpoint = courseId 
-      ? `/api/v1/courses/${courseId}/files/${fileId}`
-      : `/api/v1/files/${fileId}`;
-    
-    const fileData = await this.fetchJson(endpoint);
-    if (fileData?.url && this.cache.resolvedUrls) {
+    // ファイル詳細APIから最新の署名付きURLを取得（コース指定で失敗した場合はグローバル /api/v1/files/:id へフォールバック）
+    let fileData = null;
+    if (courseId) {
+      try {
+        fileData = await this.fetchJson(`/api/v1/courses/${courseId}/files/${fileId}`);
+      } catch (_) {
+        fileData = await this.fetchJson(`/api/v1/files/${fileId}`);
+      }
+    } else {
+      fileData = await this.fetchJson(`/api/v1/files/${fileId}`);
+    }
+
+    if (fileData && this.cache.resolvedUrls) {
       this.setLru(this.cache.resolvedUrls, cacheKey, { data: fileData, time: now }, 100);
     }
     return fileData; // 署名付きダウンロードURLやファイル名、サイズを含むオブジェクト
@@ -1079,6 +1200,8 @@ class CanvasService {
     this.cache.assignments.delete(String(courseId) + '_recent');
     this.cache.assignments.delete(String(courseId) + '_all');
     this.cache.assignments.delete(String(courseId));
+    this.cache.groupedMaterials.delete(String(courseId));
+    this.cache.allAssignments = null;
 
     return {
       success: true,
@@ -1116,15 +1239,19 @@ class CanvasService {
       }
     );
 
+    this.cache.assignments.delete(String(courseId) + '_recent');
+    this.cache.assignments.delete(String(courseId) + '_all');
     this.cache.assignments.delete(String(courseId));
+    this.cache.groupedMaterials.delete(String(courseId));
+    this.cache.allAssignments = null;
     return await res.json();
   }
 
-  // 課題の最新の提出情報（添付ファイル・履歴含む）をCanvasからダイレクト取得
+  // 課題の最新の提出情報（添付ファイル・履歴・課題詳細含む）をCanvasからダイレクト取得
   async getAssignmentSubmission(courseId, assignmentId) {
     try {
       const sub = await this.fetchJson(
-        `/api/v1/courses/${courseId}/assignments/${assignmentId}/submissions/self?include[]=submission_history&include[]=submission_comments&include[]=rubric_assessment`
+        `/api/v1/courses/${courseId}/assignments/${assignmentId}/submissions/self?include[]=submission_history&include[]=submission_comments&include[]=rubric_assessment&include[]=assignment`
       );
       if (!sub || sub.errors) return null;
 
@@ -1151,6 +1278,8 @@ class CanvasService {
         }
       }
 
+      const assignObj = sub.assignment || null;
+
       return {
         id: sub.id,
         assignmentId: sub.assignment_id || assignmentId,
@@ -1167,6 +1296,14 @@ class CanvasService {
         missing: Boolean(sub.missing),
         isSubmitted: sub.workflow_state === 'submitted' || sub.workflow_state === 'graded',
         isGraded: sub.workflow_state === 'graded',
+        assignmentDescription: assignObj?.description || null,
+        assignmentDueAt: assignObj?.due_at || null,
+        assignmentPointsPossible: assignObj?.points_possible ?? null,
+        assignmentSubmissionTypes: assignObj?.submission_types || null,
+        assignmentHtmlUrl: assignObj?.html_url || null,
+        assignmentLockedForUser: Boolean(assignObj?.locked_for_user),
+        assignmentLockExplanation: assignObj?.lock_explanation || assignObj?.lock_info?.lock_explanation || null,
+        assignmentUnlockAt: assignObj?.unlock_at || assignObj?.lock_info?.unlock_at || null,
         attachments: (attachments || []).map(att => ({
           id: att.id,
           displayName: att.display_name || att.filename,
