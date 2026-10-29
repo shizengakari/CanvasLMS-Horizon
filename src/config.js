@@ -40,7 +40,8 @@ function loadConfig() {
   // 1. AppData からユーザー設定を読み込み
   if (fs.existsSync(CONFIG_PATH)) {
     try {
-      const data = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+      const raw = fs.readFileSync(CONFIG_PATH, 'utf-8').replace(/^\uFEFF/, '').trim();
+      const data = JSON.parse(raw);
       config = { ...config, ...data };
     } catch (e) {
       console.error('AppData からの設定読み込みエラー:', e.message);
@@ -48,7 +49,8 @@ function loadConfig() {
   } else if (fs.existsSync(FALLBACK_CONFIG_PATH)) {
     // 2. ローカルディレクトリのフォールバック設定を読み込み
     try {
-      const data = JSON.parse(fs.readFileSync(FALLBACK_CONFIG_PATH, 'utf-8'));
+      const raw = fs.readFileSync(FALLBACK_CONFIG_PATH, 'utf-8').replace(/^\uFEFF/, '').trim();
+      const data = JSON.parse(raw);
       config = { ...config, ...data };
     } catch (e) {
       console.error('フォールバック設定の読み込みエラー:', e.message);

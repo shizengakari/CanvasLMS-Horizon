@@ -67,7 +67,6 @@ pub fn default_download_dir() -> String {
         .unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home)
         .join("Downloads")
-        .join("Canvas")
         .to_string_lossy()
         .into_owned()
 }
@@ -93,6 +92,9 @@ impl Default for AppConfig {
 impl AppConfig {
     /// Synchronize batteryMode, batterySaver, download_dir, and repository normalization
     pub fn normalize(&mut self) {
+        self.base_url = self.base_url.trim().trim_end_matches('/').to_string();
+        self.api_token = self.api_token.trim().to_string();
+
         if self.battery_mode == "on" {
             self.battery_saver = true;
         } else if self.battery_mode == "off" {
@@ -105,6 +107,18 @@ impl AppConfig {
         if self.download_dir.trim().is_empty() && !self.auto_download_folder.trim().is_empty() {
             self.download_dir = self.auto_download_folder.trim().to_string();
         } else if self.download_dir.trim().is_empty() {
+            self.download_dir = default_download_dir();
+        }
+        let norm_dl = self
+            .download_dir
+            .trim()
+            .trim_end_matches(['\\', '/'])
+            .to_lowercase();
+        if norm_dl.ends_with("\\downloads\\canvas")
+            || norm_dl.ends_with("/downloads/canvas")
+            || norm_dl.ends_with("\\downloads\\canvaslms")
+            || norm_dl.ends_with("/downloads/canvaslms")
+        {
             self.download_dir = default_download_dir();
         }
         self.auto_download_folder = self.download_dir.clone();
@@ -171,23 +185,88 @@ pub fn get_manual_completed_path() -> PathBuf {
     get_user_data_dir().join("manual_completed.json")
 }
 
+fn parse_config_resilient(raw: &str) -> AppConfig {
+    let cleaned = raw.trim_start_matches('\u{feff}').trim();
+    if let Ok(cfg) = serde_json::from_str::<AppConfig>(cleaned) {
+        return cfg;
+    }
+    let mut cfg = AppConfig::default();
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(cleaned) {
+        if let Some(s) = val.get("baseUrl").and_then(|v| v.as_str()) {
+            cfg.base_url = s.to_string();
+        }
+        if let Some(s) = val.get("apiToken").and_then(|v| v.as_str()) {
+            cfg.api_token = s.to_string();
+        }
+        if let Some(s) = val.get("theme").and_then(|v| v.as_str()) {
+            cfg.theme = s.to_string();
+        }
+        if let Some(s) = val.get("currentQuarter").and_then(|v| v.as_str()) {
+            cfg.current_quarter = s.to_string();
+        }
+        if let Some(s) = val.get("batteryMode").and_then(|v| v.as_str()) {
+            cfg.battery_mode = s.to_string();
+        }
+        if let Some(b) = val.get("batterySaver").and_then(|v| v.as_bool()) {
+            cfg.battery_saver = b;
+        }
+        if let Some(n) = val.get("pollIntervalMin").and_then(|v| v.as_u64()) {
+            cfg.poll_interval_min = n as u32;
+        }
+        if let Some(s) = val.get("downloadDir").and_then(|v| v.as_str()) {
+            cfg.download_dir = s.to_string();
+        }
+        if let Some(s) = val.get("autoDownloadFolder").and_then(|v| v.as_str()) {
+            cfg.auto_download_folder = s.to_string();
+        }
+        if let Some(s) = val.get("githubRepo").and_then(|v| v.as_str()) {
+            cfg.github_repo = s.to_string();
+        }
+    }
+    cfg
+}
+
 pub fn load_config_from_path(path: &Path) -> AppConfig {
     let mut config = if path.exists() {
         match fs::read_to_string(path) {
-            Ok(content) => serde_json::from_str::<AppConfig>(&content).unwrap_or_default(),
+            Ok(content) => parse_config_resilient(&content),
             Err(_) => AppConfig::default(),
         }
     } else {
         AppConfig::default()
     };
     config.normalize();
-    let _ = fs::create_dir_all(&config.download_dir);
     config
 }
 
 pub fn load_config() -> AppConfig {
     let config_path = get_config_path();
-    load_config_from_path(&config_path)
+    let mut cfg = load_config_from_path(&config_path);
+    if cfg.base_url.is_empty() || cfg.api_token.is_empty() {
+        let mut fallbacks = vec![PathBuf::from("config.json")];
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                fallbacks.push(dir.join("config.json"));
+            }
+        }
+        for fb in fallbacks {
+            if fb.exists() && fb != config_path {
+                let fb_cfg = load_config_from_path(&fb);
+                if !fb_cfg.base_url.is_empty() && !fb_cfg.api_token.is_empty() {
+                    if cfg.base_url.is_empty() {
+                        cfg.base_url = fb_cfg.base_url;
+                    }
+                    if cfg.api_token.is_empty() {
+                        cfg.api_token = fb_cfg.api_token;
+                    }
+                    cfg.normalize();
+                    let _ = save_config_to_path(&cfg, &config_path);
+                    break;
+                }
+            }
+        }
+    }
+    cfg
 }
 
 pub fn save_config_to_path(config: &AppConfig, path: &Path) -> Result<(), std::io::Error> {

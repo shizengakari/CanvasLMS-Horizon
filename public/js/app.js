@@ -1187,8 +1187,8 @@ function setupNavigation() {
   const headerSettingsBtn = document.getElementById('btn-header-settings');
   if (headerSettingsBtn) {
     headerSettingsBtn.addEventListener('click', () => {
-      const baseUrl = document.getElementById('cfg-base-url')?.value?.trim();
-      const apiToken = document.getElementById('cfg-api-token')?.value?.trim();
+      const baseUrl = document.getElementById('cfg-base-url')?.value?.trim() || state.config?.baseUrl;
+      const apiToken = document.getElementById('cfg-api-token')?.value?.trim() || state.config?.apiToken || state.config?.hasToken;
       const welcomeBanner = document.getElementById('setting-welcome-banner');
       if (welcomeBanner) {
         welcomeBanner.style.display = (baseUrl && apiToken) ? 'none' : 'flex';
@@ -1221,8 +1221,27 @@ function switchView(viewName) {
     headerSettingsBtn.classList.toggle('active', viewName === 'settings');
   }
 
-  if (viewName === 'settings' && typeof window.evaluateAppBatterySaving === 'function') {
-    window.evaluateAppBatterySaving();
+  if (viewName === 'settings') {
+    if (typeof window.evaluateAppBatterySaving === 'function') {
+      window.evaluateAppBatterySaving();
+    }
+    const urlInput = document.getElementById('cfg-base-url');
+    const tokenInput = document.getElementById('cfg-api-token');
+    if (urlInput && tokenInput && (!urlInput.value || !tokenInput.value)) {
+      api.get('/api/config').then(res => {
+        const cfg = res?.config || res;
+        if (cfg) {
+          state.config = cfg;
+          if (!urlInput.value && cfg.baseUrl) urlInput.value = cfg.baseUrl;
+          if (!tokenInput.value && cfg.apiToken) tokenInput.value = cfg.apiToken;
+          const welcomeBanner = document.getElementById('setting-welcome-banner');
+          if (welcomeBanner) {
+            const configured = Boolean(cfg.isConfigured || (cfg.baseUrl && (cfg.apiToken || cfg.hasToken)));
+            welcomeBanner.style.display = configured ? 'none' : 'flex';
+          }
+        }
+      }).catch(() => {});
+    }
   }
 
   // materials 以外のビュー（dashboard 等）ではサイドバー科目の選択状態を解除
@@ -1626,12 +1645,13 @@ async function initApp() {
     console.warn('Profile load deferred/cached:', err.message);
     try {
       const cfgRes = await api.get('/api/config');
-      if (cfgRes?.config?.batteryMode && ['auto', 'on', 'off'].includes(cfgRes.config.batteryMode)) {
-        state.batteryMode = cfgRes.config.batteryMode;
-        try { localStorage.setItem(STORAGE_KEY_BATTERY_MODE, cfgRes.config.batteryMode); } catch (_) {}
+      const cfg = cfgRes?.config || cfgRes;
+      if (cfg?.batteryMode && ['auto', 'on', 'off'].includes(cfg.batteryMode)) {
+        state.batteryMode = cfg.batteryMode;
+        try { localStorage.setItem(STORAGE_KEY_BATTERY_MODE, cfg.batteryMode); } catch (_) {}
         if (window.evaluateAppBatterySaving) window.evaluateAppBatterySaving();
       }
-      if (cfgRes?.config?.baseUrl && cfgRes?.config?.apiToken) {
+      if (cfg?.isConfigured || (cfg?.baseUrl && (cfg?.apiToken || cfg?.hasToken))) {
         switchView('dashboard');
         const welcomeBanner = document.getElementById('setting-welcome-banner');
         if (welcomeBanner) welcomeBanner.style.display = 'none';
@@ -5563,25 +5583,28 @@ function setupSettingsEvents() {
   const batterySwitch = document.getElementById('cfg-battery-saver');
 
   api.get('/api/config').then(res => {
-    if (res.success && res.config) {
-      document.getElementById('cfg-base-url').value = res.config.baseUrl || '';
-      document.getElementById('cfg-api-token').value = res.config.apiToken || '';
-      if (res.config.currentQuarter) {
-        document.getElementById('cfg-quarter').value = res.config.currentQuarter;
-        state.currentQuarter = res.config.currentQuarter;
+    const cfg = res?.config || res;
+    if (res && res.success && cfg) {
+      state.config = cfg;
+      document.getElementById('cfg-base-url').value = cfg.baseUrl || '';
+      document.getElementById('cfg-api-token').value = cfg.apiToken || '';
+      if (cfg.currentQuarter) {
+        document.getElementById('cfg-quarter').value = cfg.currentQuarter;
+        state.currentQuarter = cfg.currentQuarter;
         updateQuarterIndicators();
       }
-      if (res.config.batteryMode && ['auto', 'on', 'off'].includes(res.config.batteryMode)) {
-        state.batteryMode = res.config.batteryMode;
-        try { localStorage.setItem(STORAGE_KEY_BATTERY_MODE, res.config.batteryMode); } catch (_) {}
+      if (cfg.batteryMode && ['auto', 'on', 'off'].includes(cfg.batteryMode)) {
+        state.batteryMode = cfg.batteryMode;
+        try { localStorage.setItem(STORAGE_KEY_BATTERY_MODE, cfg.batteryMode); } catch (_) {}
         if (window.evaluateAppBatterySaving) window.evaluateAppBatterySaving();
       }
       if (batterySwitch) {
-        batterySwitch.checked = Boolean(res.config.batterySaver);
+        batterySwitch.checked = Boolean(cfg.batterySaver);
       }
       const welcomeBanner = document.getElementById('setting-welcome-banner');
       if (welcomeBanner) {
-        welcomeBanner.style.display = (res.config.baseUrl && res.config.apiToken) ? 'none' : 'flex';
+        const configured = Boolean(cfg.isConfigured || (cfg.baseUrl && (cfg.apiToken || cfg.hasToken)));
+        welcomeBanner.style.display = configured ? 'none' : 'flex';
       }
     }
   });
@@ -5613,6 +5636,7 @@ function setupSettingsEvents() {
         batteryMode: state.batteryMode
       });
       if (res.success) {
+        state.config = res.config || { ...(state.config || {}), baseUrl, apiToken, currentQuarter, theme, batteryMode: state.batteryMode };
         state.currentQuarter = currentQuarter;
         updateQuarterIndicators();
         showToast('設定を保存しました。Canvasからデータを取得しています...', 'success');

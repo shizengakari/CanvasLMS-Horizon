@@ -22,7 +22,7 @@ use tokio::io::AsyncWriteExt;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
-pub const APP_VERSION: &str = "1.4.0";
+pub const APP_VERSION: &str = "1.4.1";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DownloadJob {
@@ -490,24 +490,29 @@ async fn api_get_config() -> Json<Value> {
     let is_configured = !cfg.base_url.is_empty() && !cfg.api_token.is_empty();
     let config_obj = json!({
       "baseUrl": cfg.base_url,
+      "apiToken": cfg.api_token,
       "hasToken": !cfg.api_token.is_empty(),
       "isConfigured": is_configured,
       "maskedToken": mask_token(&cfg.api_token),
       "downloadDir": cfg.download_dir,
+      "autoDownloadFolder": cfg.auto_download_folder,
       "currentQuarter": cfg.current_quarter,
       "theme": cfg.theme,
       "batteryMode": cfg.battery_mode,
       "batterySaver": cfg.battery_saver,
-      "pollIntervalMin": 15,
+      "pollIntervalMin": cfg.poll_interval_min,
+      "githubRepo": cfg.github_repo,
     });
     Json(json!({
       "success": true,
       "config": config_obj,
       "baseUrl": cfg.base_url,
+      "apiToken": cfg.api_token,
       "hasToken": !cfg.api_token.is_empty(),
       "isConfigured": is_configured,
       "maskedToken": mask_token(&cfg.api_token),
       "downloadDir": cfg.download_dir,
+      "autoDownloadFolder": cfg.auto_download_folder,
       "currentQuarter": cfg.current_quarter,
       "theme": cfg.theme,
       "batteryMode": cfg.battery_mode,
@@ -570,15 +575,18 @@ async fn api_post_config(State(state): State<AppState>, Json(payload): Json<Valu
       "success": true,
       "config": {
         "baseUrl": saved.base_url,
+        "apiToken": saved.api_token,
         "hasToken": !saved.api_token.is_empty(),
         "isConfigured": is_configured,
         "maskedToken": mask_token(&saved.api_token),
         "downloadDir": saved.download_dir,
+        "autoDownloadFolder": saved.auto_download_folder,
         "currentQuarter": saved.current_quarter,
         "theme": saved.theme,
         "batteryMode": saved.battery_mode,
         "batterySaver": saved.battery_saver,
-        "pollIntervalMin": 15,
+        "pollIntervalMin": saved.poll_interval_min,
+        "githubRepo": saved.github_repo,
       }
     }))
 }
@@ -649,13 +657,14 @@ async fn api_get_profile(State(state): State<AppState>) -> Json<Value> {
     let is_configured = !cfg.base_url.is_empty() && !cfg.api_token.is_empty();
     let config_payload = json!({
       "baseUrl": cfg.base_url,
+      "apiToken": cfg.api_token,
       "hasToken": !cfg.api_token.is_empty(),
       "isConfigured": is_configured,
       "theme": cfg.theme,
       "currentQuarter": cfg.current_quarter,
       "batteryMode": cfg.battery_mode,
       "batterySaver": cfg.battery_saver,
-      "pollIntervalMin": 15,
+      "pollIntervalMin": cfg.poll_interval_min,
       "downloadDir": cfg.download_dir,
     });
 
