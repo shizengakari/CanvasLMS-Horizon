@@ -1960,15 +1960,15 @@ a:hover {
 }
 
 .badge-locked {
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-subtle);
+  background: rgba(245, 158, 11, 0.14);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
 }
 
 [data-theme="light"] .badge-locked {
-  background: #f1f5f9;
-  color: #475569;
-  border-color: #cbd5e1;
+  background: #fef3c7;
+  color: #b45309;
+  border-color: #fde68a;
 }
 
 /* 空状態および読み込み中表示 */
@@ -2256,67 +2256,106 @@ a:hover {
 }
 
 .module-file-icon {
-  width: 38px;
-  height: 38px;
+  width: 40px;
+  height: 40px;
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-subtle);
+  background: rgba(242, 139, 130, 0.16);
+  color: #f28b82;
+  border: 1px solid rgba(242, 139, 130, 0.32);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   box-shadow: none;
-  transition: transform var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+  transition: transform var(--transition-fast), border-color var(--transition-fast);
 }
 
 .module-file-card:hover .module-file-icon {
-  border-color: var(--border-medium);
-  color: var(--text-main);
+  transform: scale(1.05);
 }
 
-/* 1. 参照資料 (文書・ノート・動画・その他は落ち着いたニュートラル配色で統一) */
-.module-file-icon.pdf,
-.module-file-icon.page,
-.module-file-icon.video,
-.module-file-icon.other {
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-secondary);
-  border-color: var(--border-subtle);
+/* 1. 文書・PDFファイル */
+.module-file-icon.pdf {
+  background: rgba(242, 139, 130, 0.16);
+  color: #f28b82;
+  border-color: rgba(242, 139, 130, 0.35);
 }
-[data-theme="light"] .module-file-icon.pdf,
-[data-theme="light"] .module-file-icon.page,
-[data-theme="light"] .module-file-icon.video,
-[data-theme="light"] .module-file-icon.other {
-  background: #f1f5f9;
-  color: #475569;
-  border-color: #e2e8f0;
+[data-theme="light"] .module-file-icon.pdf {
+  background: #fce8e6;
+  color: #b3261e;
+  border-color: #fad2cf;
 }
 
-/* 2. 未提出の課題・小テスト (要対応タスクのみアクセントブルー) */
-.module-file-icon.assignment,
+/* 2. クイズ・アンケート */
 .module-file-icon.quiz {
-  background: rgba(138, 180, 248, 0.14);
-  color: #8ab4f8;
-  border-color: rgba(138, 180, 248, 0.32);
+  background: rgba(197, 138, 249, 0.16);
+  color: #c58af9;
+  border-color: rgba(197, 138, 249, 0.35);
 }
-[data-theme="light"] .module-file-icon.assignment,
 [data-theme="light"] .module-file-icon.quiz {
+  background: #f3e8fd;
+  color: #7627bb;
+  border-color: #e1cbf8;
+}
+
+/* 3. ページ・配布資料 */
+.module-file-icon.page {
+  background: rgba(128, 203, 196, 0.16);
+  color: #80cbc4;
+  border-color: rgba(128, 203, 196, 0.35);
+}
+[data-theme="light"] .module-file-icon.page {
+  background: #e0f2f1;
+  color: #00796b;
+  border-color: #b2dfdb;
+}
+
+/* 4. 課題・演習 */
+.module-file-icon.assignment {
+  background: rgba(138, 180, 248, 0.16);
+  color: #8ab4f8;
+  border-color: rgba(138, 180, 248, 0.35);
+}
+[data-theme="light"] .module-file-icon.assignment {
   background: #e8f0fe;
   color: #1a73e8;
   border-color: #c2e7ff;
 }
 
-/* 3. 提出済みタスク (完了グリーン) */
+/* 4-B. 提出済みタスク */
 .module-file-icon.assignment-submitted {
-  background: rgba(129, 201, 149, 0.14);
+  background: rgba(129, 201, 149, 0.16);
   color: #81c995;
-  border-color: rgba(129, 201, 149, 0.32);
+  border-color: rgba(129, 201, 149, 0.35);
 }
 [data-theme="light"] .module-file-icon.assignment-submitted {
   background: #e6f4ea;
   color: #137333;
   border-color: #ceead6;
+}
+
+/* 5. 動画コンテンツ */
+.module-file-icon.video {
+  background: rgba(239, 68, 68, 0.16);
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.35);
+}
+[data-theme="light"] .module-file-icon.video {
+  background: #fee2e2;
+  color: #dc2626;
+  border-color: #fca5a5;
+}
+
+/* 6. その他ファイル */
+.module-file-icon.other {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+  border-color: var(--border-subtle);
+}
+[data-theme="light"] .module-file-icon.other {
+  background: #f1f3f4;
+  color: #5f6368;
+  border-color: #e0e3e7;
 }
 
 .module-file-info {
@@ -2429,64 +2468,105 @@ a:hover {
   color: var(--text-main);
 }
 
-/* 1. 提出・回答ボタン (要対応タスク: ブルー) */
-.action-chip-btn.action-submit,
-.action-chip-btn.action-quiz {
-  background: rgba(138, 180, 248, 0.14);
-  border: 1px solid rgba(138, 180, 248, 0.38);
+/* 1. 提出ボタン */
+.action-chip-btn.action-submit {
+  background: rgba(138, 180, 248, 0.16);
+  border: 1px solid rgba(138, 180, 248, 0.42);
   color: #8ab4f8;
 }
-.action-chip-btn.action-submit svg,
-.action-chip-btn.action-quiz svg { color: #8ab4f8; }
-.action-chip-btn.action-submit:hover,
-.action-chip-btn.action-quiz:hover {
-  background: rgba(138, 180, 248, 0.26);
+.action-chip-btn.action-submit svg { color: #8ab4f8; }
+.action-chip-btn.action-submit:hover {
+  background: rgba(138, 180, 248, 0.3);
   border-color: #8ab4f8;
   color: #ffffff;
-  box-shadow: 0 2px 8px rgba(138, 180, 248, 0.24);
+  box-shadow: 0 2px 10px rgba(138, 180, 248, 0.28);
 }
 
-/* 2. 提出済みボタン (完了: グリーン) */
+/* 1-B. 提出済みボタン */
 .action-chip-btn.action-submitted {
-  background: rgba(129, 201, 149, 0.14);
-  border: 1px solid rgba(129, 201, 149, 0.38);
+  background: rgba(129, 201, 149, 0.16);
+  border: 1px solid rgba(129, 201, 149, 0.42);
   color: #81c995;
 }
 .action-chip-btn.action-submitted svg { color: #81c995; }
 .action-chip-btn.action-submitted:hover {
-  background: rgba(129, 201, 149, 0.26);
+  background: rgba(129, 201, 149, 0.3);
   border-color: #81c995;
   color: #ffffff;
-  box-shadow: 0 2px 8px rgba(129, 201, 149, 0.24);
+  box-shadow: 0 2px 10px rgba(129, 201, 149, 0.28);
 }
 
-/* 3. 閲覧・保存・再生・外部リンクボタン (参照操作: ニュートラル統一) */
-.action-chip-btn.action-view,
-.action-chip-btn.action-download,
-.action-chip-btn.action-play,
-.action-chip-btn.action-external {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  color: var(--text-main);
+/* 2. 回答ボタン */
+.action-chip-btn.action-quiz {
+  background: rgba(197, 138, 249, 0.16);
+  border: 1px solid rgba(197, 138, 249, 0.42);
+  color: #c58af9;
 }
-.action-chip-btn.action-view svg,
-.action-chip-btn.action-download svg,
-.action-chip-btn.action-play svg,
-.action-chip-btn.action-external svg { color: var(--text-secondary); }
-.action-chip-btn.action-view:hover,
-.action-chip-btn.action-download:hover,
-.action-chip-btn.action-play:hover,
-.action-chip-btn.action-external:hover {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.28);
+.action-chip-btn.action-quiz svg { color: #c58af9; }
+.action-chip-btn.action-quiz:hover {
+  background: rgba(197, 138, 249, 0.3);
+  border-color: #c58af9;
   color: #ffffff;
+  box-shadow: 0 2px 10px rgba(197, 138, 249, 0.28);
 }
-.action-chip-btn.action-view:hover svg,
-.action-chip-btn.action-download:hover svg,
-.action-chip-btn.action-play:hover svg,
-.action-chip-btn.action-external:hover svg { color: #ffffff; }
 
-/* 4. 手動完了ボタン */
+/* 3. 閲覧ボタン */
+.action-chip-btn.action-view {
+  background: rgba(128, 203, 196, 0.16);
+  border: 1px solid rgba(128, 203, 196, 0.42);
+  color: #80cbc4;
+}
+.action-chip-btn.action-view svg { color: #80cbc4; }
+.action-chip-btn.action-view:hover {
+  background: rgba(128, 203, 196, 0.3);
+  border-color: #80cbc4;
+  color: #ffffff;
+  box-shadow: 0 2px 10px rgba(128, 203, 196, 0.28);
+}
+
+/* 4. 保存・ダウンロードボタン */
+.action-chip-btn.action-download {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #e2e8f0;
+}
+.action-chip-btn.action-download svg { color: #cbd5e1; }
+.action-chip-btn.action-download:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #ffffff;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+
+/* 5. 再生ボタン */
+.action-chip-btn.action-play {
+  background: rgba(242, 139, 130, 0.16);
+  border: 1px solid rgba(242, 139, 130, 0.42);
+  color: #f28b82;
+}
+.action-chip-btn.action-play svg { color: #f28b82; }
+.action-chip-btn.action-play:hover {
+  background: rgba(242, 139, 130, 0.3);
+  border-color: #f28b82;
+  color: #ffffff;
+  box-shadow: 0 2px 10px rgba(242, 139, 130, 0.28);
+}
+
+/* 6. 外部リンクボタン */
+.action-chip-btn.action-external {
+  background: rgba(253, 214, 99, 0.16);
+  border: 1px solid rgba(253, 214, 99, 0.42);
+  color: #fdd663;
+}
+.action-chip-btn.action-external svg { color: #fdd663; }
+.action-chip-btn.action-external:hover {
+  background: rgba(253, 214, 99, 0.3);
+  border-color: #fdd663;
+  color: #ffffff;
+  box-shadow: 0 2px 10px rgba(253, 214, 99, 0.28);
+}
+
+/* 7. 手動完了ボタン */
 .action-chip-btn.action-check {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -2513,14 +2593,11 @@ a:hover {
 }
 
 /* ライトテーマ */
-[data-theme="light"] .action-chip-btn.action-submit,
-[data-theme="light"] .action-chip-btn.action-quiz {
+[data-theme="light"] .action-chip-btn.action-submit {
   background: #e8f0fe;
   border-color: #c2e7ff;
   color: #1a73e8;
 }
-[data-theme="light"] .action-chip-btn.action-submit svg,
-[data-theme="light"] .action-chip-btn.action-quiz svg { color: #1a73e8; }
 [data-theme="light"] .action-chip-btn.action-submitted {
   background: #e6f4ea;
   border-color: #ceead6;
@@ -2530,25 +2607,37 @@ a:hover {
   background: #ceead6;
   color: #0d652d;
 }
-[data-theme="light"] .action-chip-btn.action-view,
-[data-theme="light"] .action-chip-btn.action-download,
-[data-theme="light"] .action-chip-btn.action-play,
-[data-theme="light"] .action-chip-btn.action-external {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-  color: #334155;
+[data-theme="light"] .action-chip-btn.action-quiz {
+  background: #f3e8fd;
+  border-color: #e1cbf8;
+  color: #7627bb;
 }
-[data-theme="light"] .action-chip-btn.action-view svg,
-[data-theme="light"] .action-chip-btn.action-download svg,
-[data-theme="light"] .action-chip-btn.action-play svg,
-[data-theme="light"] .action-chip-btn.action-external svg { color: #64748b; }
-[data-theme="light"] .action-chip-btn.action-view:hover,
-[data-theme="light"] .action-chip-btn.action-download:hover,
-[data-theme="light"] .action-chip-btn.action-play:hover,
-[data-theme="light"] .action-chip-btn.action-external:hover {
-  background: #e2e8f0;
-  border-color: #94a3b8;
-  color: #0f172a;
+[data-theme="light"] .action-chip-btn.action-view {
+  background: #e0f2f1;
+  border-color: #b2dfdb;
+  color: #00796b;
+}
+[data-theme="light"] .action-chip-btn.action-download {
+  background: #f1f3f4;
+  border-color: #dadce0;
+  color: #3c4043;
+}
+[data-theme="light"] .action-chip-btn.action-download svg { color: #5f6368; }
+[data-theme="light"] .action-chip-btn.action-download:hover {
+  background: #e8eaed;
+  border-color: #bdc1c6;
+  color: #202124;
+  box-shadow: 0 2px 8px rgba(60, 64, 67, 0.15);
+}
+[data-theme="light"] .action-chip-btn.action-play {
+  background: #fce8e6;
+  border-color: #fad2cf;
+  color: #b3261e;
+}
+[data-theme="light"] .action-chip-btn.action-external {
+  background: #fef7e0;
+  border-color: #feefc3;
+  color: #b06000;
 }
 [data-theme="light"] .action-chip-btn.action-check {
   background: #f8f9fa;
@@ -5020,15 +5109,15 @@ input:checked + .slider:before {
   gap: 12px;
   padding: 18px 20px;
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--border-subtle);
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
   color: var(--text-main);
   margin-bottom: 14px;
 }
 
 [data-theme="light"] .locked-content-notice {
-  background: #f8fafc;
-  border-color: #e2e8f0;
+  background: #fffbeb;
+  border-color: #fde68a;
 }
 
 .locked-content-notice-header {
@@ -5037,11 +5126,11 @@ input:checked + .slider:before {
   gap: 8px;
   font-size: 14px;
   font-weight: 700;
-  color: var(--text-main);
+  color: #fbbf24;
 }
 
 [data-theme="light"] .locked-content-notice-header {
-  color: #1e293b;
+  color: #b45309;
 }
 
 .locked-content-notice-body {
@@ -5063,7 +5152,7 @@ input:checked + .slider:before {
   gap: 6px;
   padding: 5px 11px;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--border-subtle);
   font-size: 12px;
   color: var(--text-main);
@@ -5071,8 +5160,8 @@ input:checked + .slider:before {
 
 [data-theme="light"] .locked-schedule-item {
   background: #ffffff;
-  border-color: #cbd5e1;
-  color: #1e293b;
+  border-color: #fde68a;
+  color: #78350f;
 }
 
 .locked-schedule-label {
@@ -5087,8 +5176,8 @@ input:checked + .slider:before {
 
 /* 課題モーダル右カラム専用ロック案内カード */
 .locked-submission-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
+  background: linear-gradient(145deg, rgba(245, 158, 11, 0.09) 0%, rgba(245, 158, 11, 0.03) 100%);
+  border: 1px solid rgba(245, 158, 11, 0.25);
   border-radius: var(--radius-lg);
   padding: 22px 24px;
   display: flex;
@@ -5098,8 +5187,8 @@ input:checked + .slider:before {
 }
 
 [data-theme="light"] .locked-submission-card {
-  background: #f8fafc;
-  border-color: #e2e8f0;
+  background: linear-gradient(145deg, #fffbeb 0%, #fef3c7 100%);
+  border-color: #fcd34d;
 }
 
 .locked-submission-top {
@@ -5112,9 +5201,9 @@ input:checked + .slider:before {
   width: 40px;
   height: 40px;
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #fbbf24;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -5122,9 +5211,9 @@ input:checked + .slider:before {
 }
 
 [data-theme="light"] .locked-submission-icon {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-  color: #475569;
+  background: #fde68a;
+  border-color: #f59e0b;
+  color: #b45309;
 }
 
 .locked-submission-title {
@@ -5142,50 +5231,50 @@ input:checked + .slider:before {
   margin: 0;
 }
 
-/* ロックバッジ・アクションボタン (落ち着いたニュートラル配色) */
+/* ロックバッジ・アクションボタン (イエロー系) */
 .meta-chip.locked-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-subtle);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.28);
   font-weight: 600;
 }
 
 [data-theme="light"] .meta-chip.locked-chip {
-  background: #f1f5f9;
-  color: #475569;
-  border-color: #cbd5e1;
+  background: #fef3c7;
+  color: #b45309;
+  border-color: #fcd34d;
 }
 
 .action-chip-btn.action-locked,
 .assignment-card:hover .btn-submit-action.action-locked {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  color: var(--text-secondary);
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  color: #fbbf24;
   box-shadow: none;
 }
 .action-chip-btn.action-locked:hover,
 .btn-submit-action.action-locked:hover {
-  background: rgba(255, 255, 255, 0.09);
-  border-color: rgba(255, 255, 255, 0.24);
-  color: var(--text-main);
+  background: rgba(245, 158, 11, 0.18);
+  border-color: rgba(245, 158, 11, 0.45);
+  color: #fde68a;
   box-shadow: none;
 }
 
 [data-theme="light"] .action-chip-btn.action-locked,
 [data-theme="light"] .assignment-card:hover .btn-submit-action.action-locked {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-  color: #475569;
+  background: #fef3c7;
+  border-color: #fcd34d;
+  color: #b45309;
   box-shadow: none;
 }
 [data-theme="light"] .action-chip-btn.action-locked:hover,
 [data-theme="light"] .btn-submit-action.action-locked:hover {
-  background: #e2e8f0;
-  border-color: #94a3b8;
-  color: #1e293b;
+  background: #fde68a;
+  border-color: #f59e0b;
+  color: #92400e;
   box-shadow: none;
 }
 
