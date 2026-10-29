@@ -15,8 +15,16 @@ if (typeof window !== 'undefined' && !window.desktopAPI) {
   };
 
   window.__dispatchUpdateStatus = (data) => {
+    if (!data) return;
+    const normalized = { ...data };
+    if (!normalized.type && normalized.status) {
+      normalized.type = normalized.status === 'downloading' ? 'progress' : normalized.status;
+    }
+    if (!normalized.status && normalized.type) {
+      normalized.status = normalized.type === 'progress' ? 'downloading' : normalized.type;
+    }
     updateListeners.forEach((fn) => {
-      try { fn(data); } catch (_) {}
+      try { fn(normalized); } catch (_) {}
     });
   };
   window.__dispatchPowerStateChange = (data) => {
@@ -1670,7 +1678,10 @@ async function initApp() {
     const restartBtn = document.getElementById('btn-header-update-restart');
 
     window.desktopAPI.onUpdateStatus((status) => {
-      if (status.type === 'available') {
+      if (!status) return;
+      const eventType = status.type || (status.status === 'downloading' ? 'progress' : status.status);
+
+      if (eventType === 'available') {
         const targetVer = status.version ? (status.version.startsWith('v') ? status.version : `v${status.version}`) : 'v1.1.3';
         const curVer = document.getElementById('app-current-version')?.textContent || 'v1.1.2';
         currentUpdateData = {
@@ -1698,7 +1709,7 @@ async function initApp() {
           banner.onclick = openModalHandler;
           restartBtn.onclick = openModalHandler;
         }
-      } else if (status.type === 'progress') {
+      } else if (eventType === 'progress') {
         isUpdateDownloading = true;
         if (banner && bannerText && restartBtn) {
           bannerText.textContent = `更新ダウンロード中... ${status.percent}%`;
@@ -1729,7 +1740,7 @@ async function initApp() {
           const speedMb = status.bytesPerSecond ? `(${(status.bytesPerSecond / 1048576).toFixed(1)} MB/s)` : '';
           progressDetail.textContent = `${curMb} MB / ${totalMb} MB ${speedMb}`.trim();
         }
-      } else if (status.type === 'downloaded') {
+      } else if (eventType === 'downloaded') {
         isUpdateDownloading = false;
         isUpdateDownloaded = true;
         if (banner && bannerText && restartBtn) {
@@ -1765,7 +1776,7 @@ async function initApp() {
           };
         }
         showToast('アップデートの準備が完了しました。再起動して適用できます。', 'success');
-      } else if (status.type === 'error') {
+      } else if (eventType === 'error') {
         isUpdateDownloading = false;
         if (banner && bannerText && restartBtn) {
           bannerText.textContent = '更新ダウンロードで問題が発生しました';
@@ -5797,6 +5808,14 @@ function showUpdateModal(updateData) {
             actionBtn.onclick = () => {
               utils.openExternalUrl(updateData.downloadUrl || 'https://github.com/shizengakari/CanvasLMS-Horizon/releases');
             };
+          } else if (res.status === 'downloaded' || res.type === 'downloaded') {
+            if (typeof window.__dispatchUpdateStatus === 'function') {
+              window.__dispatchUpdateStatus({
+                status: 'downloaded',
+                type: 'downloaded',
+                version: res.version || updateData.latestVersion
+              });
+            }
           }
         } else {
           utils.openExternalUrl(updateData.downloadUrl || 'https://github.com/shizengakari/CanvasLMS-Horizon/releases');

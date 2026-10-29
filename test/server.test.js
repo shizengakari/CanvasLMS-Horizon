@@ -495,6 +495,26 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     assert.ok(mainJs.includes('quit-and-install'), 'src/main.js should handle quit-and-install');
     assert.ok(mainJs.includes('Unblock-File'), 'src/main.js should run Unblock-File when migrating to Rust exe');
   });
+
+  it('should normalize update event payloads between Rust/Tauri and Electron format in app.js and backend', () => {
+    const rootDir = path.join(__dirname, '..');
+    const appJs = fs.readFileSync(path.join(rootDir, 'public', 'js', 'app.js'), 'utf-8');
+    const rustLib = fs.readFileSync(path.join(rootDir, 'src-tauri', 'src', 'lib.rs'), 'utf-8');
+    const mainJs = fs.readFileSync(path.join(rootDir, 'src', 'main.js'), 'utf-8');
+
+    // app.js window.__dispatchUpdateStatus should normalize type and status
+    assert.ok(appJs.includes("normalized.type = normalized.status === 'downloading' ? 'progress' : normalized.status"), 'app.js should normalize status to type');
+    assert.ok(appJs.includes("eventType === 'progress'"), 'app.js onUpdateStatus should handle progress eventType');
+    assert.ok(appJs.includes("eventType === 'downloaded'"), 'app.js onUpdateStatus should handle downloaded eventType');
+
+    // Rust lib.rs dispatch_update_status should inject both status and type
+    assert.ok(rustLib.includes("obj.insert(\"type\".to_string(), json!(t))"), 'Rust lib.rs should inject type into status events');
+    assert.ok(rustLib.includes("obj.insert(\"status\".to_string(), json!(s))"), 'Rust lib.rs should inject status into type events');
+
+    // main.js should send both type and status
+    assert.ok(mainJs.includes("status: 'downloading'"), 'src/main.js should include status: downloading');
+    assert.ok(mainJs.includes("status: 'downloaded'"), 'src/main.js should include status: downloaded');
+  });
 });
 
 

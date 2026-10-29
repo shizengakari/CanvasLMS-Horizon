@@ -345,6 +345,7 @@ if (!gotTheLock) {
       if ((hasNewerVersion || canMigrateToRust) && targetAsset) {
         const updateData = {
           type: 'available',
+          status: 'available',
           version: latestTag,
           releaseNotes: release.body || '',
           releaseDate: release.published_at,
@@ -360,6 +361,7 @@ if (!gotTheLock) {
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('update-status', {
             type: 'not-available',
+            status: 'not-available',
             version: latestTag || currentVersion
           });
         }
@@ -432,6 +434,7 @@ if (!gotTheLock) {
           if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('update-status', {
               type: 'progress',
+              status: 'downloading',
               percent,
               transferred: receivedBytes,
               total: totalBytes
@@ -475,6 +478,7 @@ if (!gotTheLock) {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('update-status', {
           type: 'downloaded',
+          status: 'downloaded',
           version: release.tag_name,
           releaseNotes: release.body || ''
         });
@@ -486,6 +490,7 @@ if (!gotTheLock) {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('update-status', {
           type: 'error',
+          status: 'error',
           error: err.message
         });
       }

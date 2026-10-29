@@ -32,7 +32,22 @@ static PENDING_UPDATE: LazyLock<Mutex<Option<PendingUpdateInfo>>> =
 fn dispatch_update_status(app: Option<&tauri::AppHandle>, payload: Value) {
     if let Some(app_handle) = app {
         if let Some(win) = app_handle.get_webview_window("main") {
-            if let Ok(serialized) = serde_json::to_string(&payload) {
+            let mut normalized = payload;
+            if let Some(obj) = normalized.as_object_mut() {
+                if !obj.contains_key("type") {
+                    if let Some(st) = obj.get("status").and_then(|v| v.as_str()) {
+                        let t = if st == "downloading" { "progress" } else { st };
+                        obj.insert("type".to_string(), json!(t));
+                    }
+                }
+                if !obj.contains_key("status") {
+                    if let Some(tp) = obj.get("type").and_then(|v| v.as_str()) {
+                        let s = if tp == "progress" { "downloading" } else { tp };
+                        obj.insert("status".to_string(), json!(s));
+                    }
+                }
+            }
+            if let Ok(serialized) = serde_json::to_string(&normalized) {
                 let js = format!(
                     "if (window.__dispatchUpdateStatus) {{ window.__dispatchUpdateStatus({}); }}",
                     serialized
