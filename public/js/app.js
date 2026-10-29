@@ -3,6 +3,113 @@
  * 洗練されたUI/UXと高速性を備えた Canvas LMS デスクトップクライアント
  */
 
+// Rust (Tauri / Axum) バックエンド向けのネイティブ desktopAPI ブリッジ初期化
+if (typeof window !== 'undefined' && !window.desktopAPI) {
+  const updateListeners = [];
+  const powerListeners = [];
+  const invokeTauri = (cmd, args = {}) => {
+    if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {
+      return window.__TAURI_INTERNALS__.invoke(cmd, args);
+    }
+    return Promise.reject(new Error('Tauri IPC unavailable'));
+  };
+
+  window.__dispatchUpdateStatus = (data) => {
+    updateListeners.forEach((fn) => {
+      try { fn(data); } catch (_) {}
+    });
+  };
+  window.__dispatchPowerStateChange = (data) => {
+    powerListeners.forEach((fn) => {
+      try { fn(data); } catch (_) {}
+    });
+  };
+
+  window.desktopAPI = {
+    isTauri: true,
+    isElectron: true,
+    selectFolder: async () => {
+      try {
+        return await invokeTauri('select_folder');
+      } catch (_) {
+        const r = await fetch('/api/desktop/select-folder', { method: 'POST' });
+        const d = await r.json();
+        return d?.path || null;
+      }
+    },
+    openPath: async (targetPath) => {
+      try {
+        return await invokeTauri('open_path', { targetPath });
+      } catch (_) {
+        const r = await fetch('/api/desktop/open-path', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: targetPath })
+        });
+        return r.json();
+      }
+    },
+    openExternal: async (targetUrl) => {
+      try {
+        return await invokeTauri('open_external', { targetUrl });
+      } catch (_) {
+        const r = await fetch('/api/desktop/open-external', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: targetUrl })
+        });
+        return r.json();
+      }
+    },
+    setDownloadsActive: (active) => {
+      invokeTauri('set_downloads_active', { active: Boolean(active) }).catch(() => {});
+    },
+    relaunch: () => {
+      invokeTauri('relaunch').catch(() => window.location.reload());
+    },
+    getAppInfo: async () => {
+      try {
+        return await invokeTauri('get_app_info');
+      } catch (_) {
+        const r = await fetch('/api/desktop/app-info');
+        return r.json();
+      }
+    },
+    getPowerState: async () => {
+      try {
+        return await invokeTauri('get_power_state');
+      } catch (_) {
+        const r = await fetch('/api/desktop/power-state');
+        return r.json();
+      }
+    },
+    checkForUpdates: async () => {
+      try {
+        return await invokeTauri('check_for_updates');
+      } catch (_) {
+        const r = await fetch('/api/app/check-update');
+        return r.json();
+      }
+    },
+    startDownloadUpdate: async () => {
+      try {
+        return await invokeTauri('start_download_update');
+      } catch (_) {
+        return { success: false };
+      }
+    },
+    quitAndInstall: () => {
+      invokeTauri('quit_and_install').catch(() => {});
+    },
+    onUpdateStatus: (cb) => {
+      if (typeof cb === 'function') updateListeners.push(cb);
+    },
+    onPowerStateChange: (cb) => {
+      if (typeof cb === 'function') powerListeners.push(cb);
+    }
+  };
+}
+
 const STORAGE_KEY_BATTERY_MODE = 'canvas_horizon_battery_mode';
 const STORAGE_KEY_MANUAL_COMPLETED = 'canvas_horizon_manual_completed';
 
@@ -171,7 +278,7 @@ const utils = {
     let formatted = html.replace(urlRegex, (url) => {
       const ytId = utils.extractYouTubeVideoId(url);
       if (ytId) {
-        return `<a href="${url}" class="formatted-url-link yt-inline-link" data-yt-id="${ytId}">▶ YouTube動画を再生</a>`;
+        return `<a href="${url}" class="formatted-url-link yt-inline-link" data-yt-id="${ytId}">YouTube動画を再生</a>`;
       }
       return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="formatted-url-link">${url}</a>`;
     });
@@ -192,13 +299,34 @@ const utils = {
     }
   },
 
+  stripHtml(html) {
+    if (!html) return '';
+    const tmp = document.createElement('div');
+    tmp.innerHTML = String(html)
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/p>/gi, '\n\n')
+      .replace(/<\/div>/gi, '\n')
+      .replace(/<\/li>/gi, '\n');
+    return (tmp.textContent || tmp.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+  },
+
   normalizeFileName(rawName, fallback = 'download') {
     let cleaned = String(rawName || '').replace(/[\r\n\t]+/g, ' ').trim();
-    if (!cleaned) cleaned = fallback;
-    // Strip accidental .pdf appended after a non-PDF extension (e.g. "report.docx.pdf" -> "report.docx")
-    const doubleExtMatch = cleaned.match(/^(.+\.(docx?|pptx?|xlsx?|zip|7z|rar|tar|gz|tgz|csv|tsv|txt|md|json|xml|yaml|yml|py|java|c|cpp|cc|h|hpp|cs|js|ts|html?|css|sql|sh|bat|ps1|r|ipynb|png|jpe?g|gif|webp|svg|bmp|mp4|mov|webm|mkv|mp3|wav|m4a|ogg))\.pdf$/i);
-    if (doubleExtMatch) {
-      cleaned = doubleExtMatch[1];
+    if (!cleaned) return fallback;
+    // Canvas のスクリーンリーダー用補足文字列や末尾のサイズ表記を除去
+    cleaned = cleaned
+      .replace(/\s*\((?:新しいウィンドウで開きます|外部サイトへのリンク[^)]*|[0-9.]+\s*[KMGT]?B)\)\s*$/i, '')
+      .replace(/\s+(?:新しいウィンドウで開きます|外部サイトへのリンク.*)$/i, '')
+      .trim();
+    if (!cleaned) return fallback;
+    // 非PDF拡張子の後ろに誤って付与された .pdf を除去 (例: "report.docx.pdf", "slide.pptx.pdf", "sheet.xlsx.pdf", "archive.zip.pdf", "drawing.dwg.pdf", "doc.docs.pdf")
+    for (let i = 0; i < 3; i++) {
+      const m = cleaned.match(/^(.+(\.[a-z0-9]{1,8}))\.pdf$/i);
+      if (m && /[a-z]/i.test(m[2]) && !/^\.v\d+$/i.test(m[2]) && m[2].toLowerCase() !== '.pdf') {
+        cleaned = m[1];
+      } else {
+        break;
+      }
     }
     return cleaned;
   },
@@ -213,44 +341,64 @@ const utils = {
         if (nameParam) {
           const norm = utils.normalizeFileName(nameParam, '');
           const m = norm.match(/\.([a-z0-9]{1,10})$/i);
-          if (m) return `.${m[1].toLowerCase()}`;
+          if (m && /[a-z]/i.test(m[1])) return `.${m[1].toLowerCase()}`;
         }
       }
     } catch (_) {}
-    const withoutQuery = str.split('#')[0].split('?')[0];
-    const norm = utils.normalizeFileName(withoutQuery, '');
+
+    let target = str.split('#')[0].split('?')[0];
+    // URL の場合はパス部分のみから拡張子を判定（ドメイン名の .jp や .com を誤検出しない）
+    if (/^https?:\/\//i.test(target)) {
+      try {
+        target = new URL(target).pathname;
+      } catch (_) {}
+    }
+
+    const norm = utils.normalizeFileName(target, '');
     const m = norm.match(/\.([a-z0-9]{1,10})$/i);
-    return m ? `.${m[1].toLowerCase()}` : '';
+    if (m && /[a-z]/i.test(m[1])) return `.${m[1].toLowerCase()}`;
+
+    // リンク文字列の途中にファイル名が含まれている場合のフォールバック（例: "課題シート.docx をダウンロード"）
+    const inlineMatch = norm.match(/\.(pdf|docx?|docs|docm|dotx|dotm|pptx?|pptm|ppsx|potx|xlsx?|xlsm|xlsb|xltx|vsdx?|rtf|odt|ods|odp|odg|pages|numbers|key|epub|zip|7z|rar|tar|gz|tgz|bz2|xz|zst|iso|jar|whl|csv|tsv|txt|md|markdown|rst|json|jsonl|xml|yaml|yml|toml|ini|cfg|conf|log|py|ipynb|java|kt|kts|scala|swift|dart|c|cpp|cc|cxx|h|hpp|cs|go|rs|rb|php|pl|lua|jl|hs|js|jsx|mjs|cjs|ts|tsx|vue|svelte|html?|css|scss|less|sql|sh|bash|zsh|bat|cmd|ps1|r|rmd|m|mlx|mat|tex|bib|sty|cls|v|sv|vhd|vhdl|ino|asm|dwg|dxf|stl|obj|fbx|step|stp|iges|igs|blend|psd|ai|eps|sqlite3?|db|parquet|h5|hdf5|sav|rdata|rds|png|jpe?g|gif|webp|svg|bmp|ico|tif|tiff|heic|heif|avif|mp4|mov|webm|mkv|avi|wmv|flv|m4v|mp3|wav|m4a|aac|ogg|flac|wma|mid|midi|srt|vtt)(?=[\s\)）】\]」』]|$)/i);
+    return inlineMatch ? `.${inlineMatch[1].toLowerCase()}` : '';
+  },
+
+  extractCleanFileNameFromText(text, fallback = '') {
+    if (!text) return fallback;
+    const norm = utils.normalizeFileName(text, '');
+    const m = norm.match(/([^\s\/\\<>:"|?*]+\.(?:pdf|docx?|docs|docm|dotx|dotm|pptx?|pptm|ppsx|potx|xlsx?|xlsm|xlsb|xltx|vsdx?|rtf|odt|ods|odp|odg|pages|numbers|key|epub|zip|7z|rar|tar|gz|tgz|bz2|xz|zst|iso|jar|whl|csv|tsv|txt|md|markdown|rst|json|jsonl|xml|yaml|yml|toml|ini|cfg|conf|log|py|ipynb|java|kt|kts|scala|swift|dart|c|cpp|cc|cxx|h|hpp|cs|go|rs|rb|php|pl|lua|jl|hs|js|jsx|mjs|cjs|ts|tsx|vue|svelte|html?|css|scss|less|sql|sh|bash|zsh|bat|cmd|ps1|r|rmd|m|mlx|mat|tex|bib|sty|cls|v|sv|vhd|vhdl|ino|asm|dwg|dxf|stl|obj|fbx|step|stp|iges|igs|blend|psd|ai|eps|sqlite3?|db|parquet|h5|hdf5|sav|rdata|rds|png|jpe?g|gif|webp|svg|bmp|ico|tif|tiff|heic|heif|avif|mp4|mov|webm|mkv|avi|wmv|flv|m4v|mp3|wav|m4a|aac|ogg|flac|wma|mid|midi|srt|vtt))(?=[\s\)）】\]」』]|$)/i);
+    return m ? utils.normalizeFileName(m[1], norm) : norm;
   },
 
   classifyFile(nameOrUrl, contentType = '') {
     const ext = utils.extractCleanExtension(nameOrUrl);
     const mime = String(contentType || '').split(';')[0].trim().toLowerCase();
 
-    if (ext === '.pdf' || mime === 'application/pdf') return 'pdf';
+    // 明示的な非PDF拡張子がある場合は application/pdf の誤付与よりも拡張子を優先
+    if (ext === '.pdf' || (!ext && mime === 'application/pdf')) return 'pdf';
 
-    if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.avif'].includes(ext) || mime.startsWith('image/')) {
+    if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.avif'].includes(ext) || (!ext && mime.startsWith('image/'))) {
       return 'image';
     }
 
-    if (['.csv', '.tsv'].includes(ext) || mime === 'text/csv' || mime === 'text/tab-separated-values') {
+    if (['.csv', '.tsv'].includes(ext) || (!ext && (mime === 'text/csv' || mime === 'text/tab-separated-values'))) {
       return 'csv';
     }
 
     if ([
-      '.txt', '.md', '.markdown', '.json', '.xml', '.yaml', '.yml', '.log', '.ini', '.conf', '.toml',
-      '.py', '.java', '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.cs', '.js', '.jsx', '.mjs', '.cjs',
-      '.ts', '.tsx', '.html', '.htm', '.css', '.scss', '.sql', '.sh', '.bash', '.bat', '.ps1', '.r',
-      '.rb', '.go', '.rs', '.php', '.tex', '.swift', '.kt', '.scala', '.lua', '.v', '.sv', '.vhd', '.vhdl'
-    ].includes(ext) || mime === 'text/plain' || mime === 'text/markdown' || mime === 'application/json') {
+      '.txt', '.md', '.markdown', '.rst', '.json', '.jsonl', '.xml', '.yaml', '.yml', '.log', '.ini', '.cfg', '.conf', '.toml',
+      '.py', '.java', '.kt', '.kts', '.scala', '.swift', '.dart', '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.cs', '.js', '.jsx', '.mjs', '.cjs',
+      '.ts', '.tsx', '.vue', '.svelte', '.html', '.htm', '.css', '.scss', '.less', '.sql', '.sh', '.bash', '.zsh', '.bat', '.cmd', '.ps1', '.r', '.rmd',
+      '.rb', '.go', '.rs', '.php', '.pl', '.lua', '.jl', '.hs', '.tex', '.bib', '.sty', '.cls', '.v', '.sv', '.vhd', '.vhdl', '.ino', '.asm', '.srt', '.vtt'
+    ].includes(ext) || (!ext && (mime === 'text/plain' || mime === 'text/markdown' || mime === 'application/json'))) {
       return 'text';
     }
 
-    if (['.mp4', '.webm', '.mov', '.mkv', '.m4v'].includes(ext) || mime.startsWith('video/')) {
+    if (['.mp4', '.webm', '.mov', '.mkv', '.m4v'].includes(ext) || (!ext && mime.startsWith('video/'))) {
       return 'video';
     }
 
-    if (['.mp3', '.wav', '.m4a', '.ogg', '.flac', '.aac'].includes(ext) || mime.startsWith('audio/')) {
+    if (['.mp3', '.wav', '.m4a', '.ogg', '.flac', '.aac'].includes(ext) || (!ext && mime.startsWith('audio/'))) {
       return 'audio';
     }
 
@@ -1131,7 +1279,7 @@ function setupTheme() {
     }
 
     if (notify) {
-      showToast(isDark ? '🌙 ダークモードに切り替えました' : '☀️ ライトモードに切り替えました');
+      showToast(isDark ? 'ダークモードに切り替えました' : 'ライトモードに切り替えました');
     }
   }
 
@@ -1691,9 +1839,10 @@ function renderSidebarCourses(courses) {
 
   const fragment = document.createDocumentFragment();
   const pendingCountMap = new Map();
+  const nowMs = Date.now();
   if (Array.isArray(state.allAssignments)) {
     for (const a of state.allAssignments) {
-      if (!a.isSubmitted && a.courseId != null) {
+      if (isAssignmentActivePending(a, nowMs) && a.courseId != null) {
         const cid = String(a.courseId);
         pendingCountMap.set(cid, (pendingCountMap.get(cid) || 0) + 1);
       }
@@ -1817,6 +1966,20 @@ async function loadAllAssignments(forceRefresh = false) {
   }
 }
 
+// 未提出かつ表示対象の有効課題かを判定（提出済・採点済・手動完了・24時間以上超過の過去課題を除外）
+function isAssignmentActivePending(a, nowMs = Date.now()) {
+  if (!a) return false;
+  if (a.isSubmitted || a.isGraded || isAssignmentManuallyCompleted(a.id)) return false;
+  if (a.dueAt) {
+    const dueMs = (a.dueTime !== undefined && a.dueTime > 0) ? a.dueTime : new Date(a.dueAt).getTime();
+    if (!isNaN(dueMs)) {
+      const diffHours = (dueMs - nowMs) / (1000 * 60 * 60);
+      if (diffHours < -24) return false;
+    }
+  }
+  return true;
+}
+
 function updateAssignmentMetrics(assignments = null) {
   let list = assignments || state.allAssignments || [];
   // 学期フィルターが有効な場合は連動
@@ -1824,14 +1987,14 @@ function updateAssignmentMetrics(assignments = null) {
     list = list.filter(a => a.isCurrentQuarter);
   }
 
-  const pending = list.filter(a => !a.isSubmitted && !isAssignmentManuallyCompleted(a.id));
-  const submitted = list.filter(a => a.isSubmitted || isAssignmentManuallyCompleted(a.id));
+  const nowMs = Date.now();
+  const pending = list.filter(a => isAssignmentActivePending(a, nowMs));
+  const submitted = list.filter(a => a.isSubmitted || a.isGraded || isAssignmentManuallyCompleted(a.id));
 
-  const now = new Date();
   const urgent = pending.filter(a => {
     if (!a.dueAt) return false;
-    const due = new Date(a.dueAt);
-    const diffHours = (due - now) / (1000 * 60 * 60);
+    const dueMs = (a.dueTime !== undefined && a.dueTime > 0) ? a.dueTime : new Date(a.dueAt).getTime();
+    const diffHours = (dueMs - nowMs) / (1000 * 60 * 60);
     // 締切直前24時間以内および締切直後24時間以内（24時間以上超過したものは除外）
     return diffHours >= -24 && diffHours <= 24;
   });
@@ -1874,21 +2037,21 @@ function renderAssignmentsList() {
   list.innerHTML = '';
 
   let filtered = [...state.allAssignments];
+  const nowMs = Date.now();
 
   // 1. ステータスフィルター
   if (state.assignmentFilter === 'unsubmitted') {
-    filtered = filtered.filter(a => !a.isSubmitted && !isAssignmentManuallyCompleted(a.id));
+    filtered = filtered.filter(a => isAssignmentActivePending(a, nowMs));
   } else if (state.assignmentFilter === 'submitted') {
     filtered = filtered.filter(a => (a.isSubmitted || isAssignmentManuallyCompleted(a.id)) && !a.isGraded);
   } else if (state.assignmentFilter === 'graded') {
     filtered = filtered.filter(a => a.isGraded);
   } else if (state.assignmentFilter === 'urgent') {
     // 24時間以内（締切前24時間〜締切直後24時間）
-    const now = new Date();
     filtered = filtered.filter(a => {
-      if (a.isSubmitted || isAssignmentManuallyCompleted(a.id) || !a.dueAt) return false;
-      const due = new Date(a.dueAt);
-      const diffHours = (due - now) / (1000 * 60 * 60);
+      if (!isAssignmentActivePending(a, nowMs) || !a.dueAt) return false;
+      const dueMs = (a.dueTime !== undefined && a.dueTime > 0) ? a.dueTime : new Date(a.dueAt).getTime();
+      const diffHours = (dueMs - nowMs) / (1000 * 60 * 60);
       return diffHours >= -24 && diffHours <= 24;
     });
   }
@@ -2061,29 +2224,27 @@ function createAssignmentCardElement(a) {
   const card = document.createElement('div');
   const isManualDone = isAssignmentManuallyCompleted(a.id);
   const isDone = a.isSubmitted || a.isGraded || isManualDone;
+  const isLocked = Boolean(a.isLocked);
   const urgency = utils.getDueUrgency(a.dueAt, a.isSubmitted, a.id);
   const color = utils.getCourseColor(a.courseName || a.courseId);
 
   let statusCls = urgency.level;
   if (a.isGraded) statusCls = 'graded';
   else if (a.isSubmitted || isManualDone) statusCls = 'submitted';
+  else if (isLocked) statusCls = 'locked';
 
   card.className = `assignment-card ${statusCls}`;
   
   const dueFormatted = utils.formatDate(a.dueAt);
   const pointsBadge = a.pointsPossible ? `<span class="assignment-points">${a.pointsPossible} 点</span>` : '';
 
-  // 状態バッジ
+  // 状態バッジ (右側のボタンと重複する表示は省き、必要な情報のみシンプルに表示)
   let badgeHtml = '';
-  if (a.isGraded) {
-    badgeHtml = `<span class="badge badge-submitted">採点済み (${a.submission?.score ?? ''}点)</span>`;
-  } else if (a.isSubmitted) {
-    badgeHtml = '<span class="badge badge-submitted"><svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg> 提出済み</span>';
-  } else if (isManualDone) {
-    badgeHtml = '<span class="badge badge-submitted"><svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg> 完了マーク</span>';
-  } else if (urgency.level === 'urgent') {
-    badgeHtml = `<span class="badge badge-urgent"><svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> ${urgency.text}</span>`;
-  } else if (urgency.level === 'pending') {
+  if (a.isGraded && a.submission?.score != null) {
+    badgeHtml = `<span class="badge badge-submitted">${a.submission.score}点</span>`;
+  } else if (!isDone && !isLocked && urgency.level === 'urgent') {
+    badgeHtml = `<span class="badge badge-urgent">${urgency.text}</span>`;
+  } else if (!isDone && !isLocked && urgency.level === 'pending') {
     badgeHtml = `<span class="badge badge-pending">${urgency.text}</span>`;
   }
 
@@ -2099,15 +2260,22 @@ function createAssignmentCardElement(a) {
        </button>`;
 
   // アクションボタン (保存ボタン action-chip-btn と統一規格のピルデザイン・適正サイズ)
-  const actionBtnHtml = a.isSubmitted
-    ? `<button class="btn-view-submission action-chip-btn action-submitted" title="提出内容を確認">
+  let actionBtnHtml = '';
+  if (a.isSubmitted) {
+    actionBtnHtml = `<button class="btn-view-submission action-chip-btn action-submitted" title="提出内容を確認">
         <svg class="btn-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
         <span>提出済</span>
-       </button>`
-    : `<button class="btn-submit-action action-chip-btn action-submit" title="課題の提出画面を開く">
+       </button>`;
+  } else if (isLocked) {
+    actionBtnHtml = `<button class="btn-submit-action action-chip-btn action-locked" title="詳細を確認">
+        <span>ロック中</span>
+       </button>`;
+  } else {
+    actionBtnHtml = `<button class="btn-submit-action action-chip-btn action-submit" title="課題の提出画面を開く">
         <svg class="btn-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
         <span>提出</span>
        </button>`;
+  }
 
   const cleanCourse = a.cleanCourseName || a.courseName || '科目';
 
@@ -2141,6 +2309,7 @@ function createAssignmentCardElement(a) {
       e.stopPropagation();
       toggleAssignmentManualComplete(a.id);
       renderAssignmentsList();
+      renderSidebarCourses(state.courses);
     });
   }
 
@@ -2352,9 +2521,9 @@ function renderAssignmentSubmissionHistory(submission, assignment) {
     const extDisplay = hasDot ? `.${rawExt.toLowerCase()}` : 'FILE';
 
     const isPdf = ext === 'PDF';
-    const isDoc = ['DOC', 'DOCX', 'TXT', 'MD', 'RTF', 'ODT', 'PAGES', 'TEX'].includes(ext);
-    const isSheet = ['XLS', 'XLSX', 'CSV', 'TSV', 'ODS', 'NUMBERS'].includes(ext);
-    const isSlide = ['PPT', 'PPTX', 'KEY', 'ODP'].includes(ext);
+    const isDoc = ['DOC', 'DOCX', 'DOCS', 'DOCM', 'DOTX', 'DOTM', 'TXT', 'MD', 'RTF', 'ODT', 'PAGES', 'TEX'].includes(ext);
+    const isSheet = ['XLS', 'XLSX', 'XLSM', 'XLSB', 'CSV', 'TSV', 'ODS', 'NUMBERS'].includes(ext);
+    const isSlide = ['PPT', 'PPTX', 'PPTM', 'PPSX', 'KEY', 'ODP'].includes(ext);
     const isZip = ['ZIP', 'TAR', 'GZ', '7Z', 'RAR', 'BZ2', 'XZ', 'TGZ'].includes(ext);
     const isImage = ['PNG', 'JPG', 'JPEG', 'GIF', 'WEBP', 'SVG', 'BMP', 'ICO', 'TIFF', 'PSD', 'AI', 'EPS'].includes(ext);
     const isVideo = ['MP4', 'MOV', 'AVI', 'MKV', 'WEBM', 'FLV', 'WMV', 'M4V'].includes(ext);
@@ -2712,12 +2881,53 @@ const modalNav = {
   }
 };
 
-function renderLockedContentNotice(lockExplanation, htmlUrl = null) {
-  const safeMsg = utils.escapeHtml(lockExplanation || 'このコンテンツは現在ロックされているか、公開期間外です。');
+function renderLockedContentNotice(lockExplanation, htmlUrl = null, meta = {}) {
+  const cleanedText = utils.stripHtml(lockExplanation || '');
+  const safeMsg = utils.escapeHtml(cleanedText || 'このコンテンツは現在ロックされているか、公開期間外です。');
+
+  const nowMs = Date.now();
+  let headerTitle = '現在ロックされています';
+  if (meta.unlockAt && new Date(meta.unlockAt).getTime() > nowMs) {
+    headerTitle = '公開前のコンテンツです';
+  } else if (meta.lockAt && new Date(meta.lockAt).getTime() <= nowMs) {
+    headerTitle = '公開期間・受付が終了しました';
+  }
+
+  const scheduleItems = [];
+  if (meta.unlockAt) {
+    scheduleItems.push(`
+      <div class="locked-schedule-item">
+        <span class="locked-schedule-label">公開開始:</span>
+        <span class="locked-schedule-value">${utils.escapeHtml(utils.formatDate(meta.unlockAt))}</span>
+      </div>
+    `);
+  }
+  if (meta.dueAt) {
+    scheduleItems.push(`
+      <div class="locked-schedule-item">
+        <span class="locked-schedule-label">提出期限:</span>
+        <span class="locked-schedule-value">${utils.escapeHtml(utils.formatDate(meta.dueAt))}</span>
+      </div>
+    `);
+  }
+  if (meta.lockAt) {
+    scheduleItems.push(`
+      <div class="locked-schedule-item">
+        <span class="locked-schedule-label">ロック日時:</span>
+        <span class="locked-schedule-value">${utils.escapeHtml(utils.formatDate(meta.lockAt))}</span>
+      </div>
+    `);
+  }
+
+  const scheduleHtml = scheduleItems.length > 0
+    ? `<div class="locked-schedule-grid">${scheduleItems.join('')}</div>`
+    : '';
+
   const linkHtml = htmlUrl ? `
-    <div style="margin-top: 6px;">
+    <div style="margin-top: 2px;">
       <a href="${utils.escapeHtml(htmlUrl)}" class="btn-secondary btn-sm locked-external-link" style="display: inline-flex; align-items: center; gap: 6px; text-decoration: none;">
-        <span>Canvasで確認する ↗</span>
+        <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+        <span>Canvasで確認する</span>
       </a>
     </div>
   ` : '';
@@ -2725,12 +2935,152 @@ function renderLockedContentNotice(lockExplanation, htmlUrl = null) {
     <div class="locked-content-notice">
       <div class="locked-content-notice-header">
         <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
-        <span>現在ロックされています</span>
+        <span>${headerTitle}</span>
       </div>
       <div class="locked-content-notice-body">${safeMsg}</div>
+      ${scheduleHtml}
       ${linkHtml}
     </div>
   `;
+}
+
+function renderAssignmentSubmissionPanel(assignment) {
+  const types = assignment.submissionTypes || [];
+  const canUpload = types.includes('online_upload');
+  const canText = types.includes('online_text_entry');
+  const canUrl = types.includes('online_url');
+  const isQuiz = types.includes('online_quiz');
+  const isLocked = Boolean(assignment.isLocked);
+
+  const tabsContainer = document.getElementById('modal-submission-tabs');
+  const quizNotice = document.getElementById('modal-quiz-notice');
+  const extNotice = document.getElementById('modal-external-notice');
+  const lockedNotice = document.getElementById('modal-locked-notice');
+  const tabUploadBtn = document.getElementById('sub-tab-upload');
+  const tabTextBtn = document.getElementById('sub-tab-text');
+  const tabUrlBtn = document.getElementById('sub-tab-url');
+
+  const onlineTypesCount = (canUpload ? 1 : 0) + (canText ? 1 : 0) + (canUrl ? 1 : 0);
+
+  if (isLocked) {
+    if (tabsContainer) tabsContainer.style.display = 'none';
+    if (quizNotice) quizNotice.style.display = 'none';
+    if (extNotice) extNotice.style.display = 'none';
+    document.getElementById('tab-content-upload').style.display = 'none';
+    document.getElementById('tab-content-text').style.display = 'none';
+    document.getElementById('tab-content-url').style.display = 'none';
+
+    if (lockedNotice) {
+      const nowMs = Date.now();
+      let titleText = '現在この課題はロックされています';
+      let defaultDesc = 'Canvas上でロックされているため、現在は新規提出や再提出ができません。';
+      if (assignment.unlockAt && new Date(assignment.unlockAt).getTime() > nowMs) {
+        titleText = '公開前の課題です';
+        defaultDesc = `この課題は ${utils.formatDate(assignment.unlockAt)} に公開・提出受付が開始されます。`;
+      } else if (assignment.lockAt && new Date(assignment.lockAt).getTime() <= nowMs) {
+        titleText = '提出受付期間が終了しました';
+        defaultDesc = `この課題は ${utils.formatDate(assignment.lockAt)} にロックされ、提出受付が終了しています。`;
+      }
+      const explanation = utils.stripHtml(assignment.lockExplanation || '') || defaultDesc;
+
+      const scheduleRows = [];
+      if (assignment.unlockAt) {
+        scheduleRows.push(`<div class="locked-schedule-item"><span class="locked-schedule-label">公開開始:</span><span class="locked-schedule-value">${utils.escapeHtml(utils.formatDate(assignment.unlockAt))}</span></div>`);
+      }
+      if (assignment.dueAt) {
+        scheduleRows.push(`<div class="locked-schedule-item"><span class="locked-schedule-label">提出期限:</span><span class="locked-schedule-value">${utils.escapeHtml(utils.formatDate(assignment.dueAt))}</span></div>`);
+      }
+      if (assignment.lockAt) {
+        scheduleRows.push(`<div class="locked-schedule-item"><span class="locked-schedule-label">ロック日時:</span><span class="locked-schedule-value">${utils.escapeHtml(utils.formatDate(assignment.lockAt))}</span></div>`);
+      }
+
+      lockedNotice.innerHTML = `
+        <div class="locked-submission-top">
+          <div class="locked-submission-icon">
+            <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+          </div>
+          <div style="flex: 1; min-width: 0;">
+            <h4 class="locked-submission-title">${utils.escapeHtml(titleText)}</h4>
+            <p class="locked-submission-desc">${utils.escapeHtml(explanation)}</p>
+          </div>
+        </div>
+        ${scheduleRows.length > 0 ? `<div class="locked-schedule-grid">${scheduleRows.join('')}</div>` : ''}
+        ${assignment.htmlUrl ? `
+          <div>
+            <a href="${utils.escapeHtml(assignment.htmlUrl)}" class="btn-secondary btn-sm" id="btn-open-canvas-locked" style="display: inline-flex; align-items: center; gap: 6px; text-decoration: none;">
+              <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+              <span>Canvasで課題ページを開く</span>
+            </a>
+          </div>
+        ` : ''}
+      `;
+      lockedNotice.style.display = 'flex';
+      const lockedBtn = lockedNotice.querySelector('#btn-open-canvas-locked');
+      if (lockedBtn) {
+        lockedBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          utils.openExternalUrl(assignment.htmlUrl);
+        });
+      }
+    }
+    return;
+  }
+
+  if (lockedNotice) {
+    lockedNotice.style.display = 'none';
+    lockedNotice.innerHTML = '';
+  }
+
+  if (onlineTypesCount > 0) {
+    quizNotice.style.display = 'none';
+    extNotice.style.display = 'none';
+    tabsContainer.style.display = 'flex';
+
+    tabUploadBtn.style.display = canUpload ? 'inline-flex' : 'none';
+    tabTextBtn.style.display = canText ? 'inline-flex' : 'none';
+    tabUrlBtn.style.display = canUrl ? 'inline-flex' : 'none';
+
+    const defaultTab = canUpload ? 'upload' : (canText ? 'text' : 'url');
+    switchSubmissionTab(defaultTab);
+  } else if (isQuiz) {
+    tabsContainer.style.display = 'none';
+    extNotice.style.display = 'none';
+    quizNotice.style.display = 'block';
+    const quizLink = document.getElementById('btn-open-canvas-quiz');
+    const quizUrl = assignment.htmlUrl || '#';
+    quizLink.href = quizUrl;
+    quizLink.setAttribute('data-url', assignment.htmlUrl || '');
+    document.getElementById('tab-content-upload').style.display = 'none';
+    document.getElementById('tab-content-text').style.display = 'none';
+    document.getElementById('tab-content-url').style.display = 'none';
+  } else {
+    tabsContainer.style.display = 'none';
+    quizNotice.style.display = 'none';
+    extNotice.style.display = 'block';
+    const extLink = document.getElementById('btn-open-canvas-external');
+    const extUrl = assignment.htmlUrl || '#';
+    extLink.href = extUrl;
+    extLink.setAttribute('data-url', assignment.htmlUrl || '');
+    document.getElementById('tab-content-upload').style.display = 'none';
+    document.getElementById('tab-content-text').style.display = 'none';
+    document.getElementById('tab-content-url').style.display = 'none';
+  }
+}
+
+function renderAssignmentDescriptionArea(assignment) {
+  const descBox = document.getElementById('modal-description-box');
+  if (!descBox) return;
+  const hasDesc = Boolean(assignment.description && assignment.description.trim());
+  const isLocked = Boolean(assignment.isLocked || assignment.lockExplanation);
+
+  if (hasDesc) {
+    descBox.innerHTML = utils.formatHtmlWithLinks(assignment.description);
+    setupContentLinks(descBox, assignment.courseId);
+  } else if (isLocked) {
+    descBox.innerHTML = '<span style="color: var(--text-muted);">公開期間外またはロック中のため、課題説明は表示されていません。</span>';
+  } else {
+    descBox.innerHTML = '<span style="color: var(--text-muted);">説明なし</span>';
+  }
 }
 
 function openAssignmentModal(assignment) {
@@ -2758,67 +3108,8 @@ function openAssignmentModal(assignment) {
 
   document.getElementById('modal-allowed-types').textContent = readableTypes.length > 0 ? readableTypes.join(' / ') : (types.join(', ') || 'なし');
 
-  const descBox = document.getElementById('modal-description-box');
-  if (assignment.description && assignment.description.trim()) {
-    descBox.innerHTML = utils.formatHtmlWithLinks(assignment.description);
-    setupContentLinks(descBox, assignment.courseId);
-  } else if (assignment.lockExplanation) {
-    descBox.innerHTML = renderLockedContentNotice(assignment.lockExplanation, assignment.htmlUrl);
-    setupContentLinks(descBox, assignment.courseId);
-  } else {
-    descBox.innerHTML = '<span style="color: var(--text-muted);">説明なし</span>';
-  }
-
-  // 提出可能なフォーマットの判定
-  const canUpload = types.includes('online_upload');
-  const canText = types.includes('online_text_entry');
-  const canUrl = types.includes('online_url');
-  const isQuiz = types.includes('online_quiz');
-
-  const tabsContainer = document.getElementById('modal-submission-tabs');
-  const quizNotice = document.getElementById('modal-quiz-notice');
-  const extNotice = document.getElementById('modal-external-notice');
-  const tabUploadBtn = document.getElementById('sub-tab-upload');
-  const tabTextBtn = document.getElementById('sub-tab-text');
-  const tabUrlBtn = document.getElementById('sub-tab-url');
-
-  const onlineTypesCount = (canUpload ? 1 : 0) + (canText ? 1 : 0) + (canUrl ? 1 : 0);
-
-  if (onlineTypesCount > 0) {
-    quizNotice.style.display = 'none';
-    extNotice.style.display = 'none';
-    tabsContainer.style.display = 'flex';
-
-    tabUploadBtn.style.display = canUpload ? 'inline-flex' : 'none';
-    tabTextBtn.style.display = canText ? 'inline-flex' : 'none';
-    tabUrlBtn.style.display = canUrl ? 'inline-flex' : 'none';
-
-    // 利用可能な最初の提出タブをデフォルト選択
-    const defaultTab = canUpload ? 'upload' : (canText ? 'text' : 'url');
-    switchSubmissionTab(defaultTab);
-  } else if (isQuiz) {
-    tabsContainer.style.display = 'none';
-    extNotice.style.display = 'none';
-    quizNotice.style.display = 'block';
-    const quizLink = document.getElementById('btn-open-canvas-quiz');
-    const quizUrl = assignment.htmlUrl || '#';
-    quizLink.href = quizUrl;
-    quizLink.setAttribute('data-url', assignment.htmlUrl || '');
-    document.getElementById('tab-content-upload').style.display = 'none';
-    document.getElementById('tab-content-text').style.display = 'none';
-    document.getElementById('tab-content-url').style.display = 'none';
-  } else {
-    tabsContainer.style.display = 'none';
-    quizNotice.style.display = 'none';
-    extNotice.style.display = 'block';
-    const extLink = document.getElementById('btn-open-canvas-external');
-    const extUrl = assignment.htmlUrl || '#';
-    extLink.href = extUrl;
-    extLink.setAttribute('data-url', assignment.htmlUrl || '');
-    document.getElementById('tab-content-upload').style.display = 'none';
-    document.getElementById('tab-content-text').style.display = 'none';
-    document.getElementById('tab-content-url').style.display = 'none';
-  }
+  renderAssignmentDescriptionArea(assignment);
+  renderAssignmentSubmissionPanel(assignment);
 
   // 過去の提出済みファイル一覧の初回レンダリング（エクスプローラー風詳細行）
   renderAssignmentSubmissionHistory(assignment.submission, assignment);
@@ -2834,22 +3125,44 @@ function openAssignmentModal(assignment) {
           state.currentModalAssignment.isSubmitted = Boolean(res.submission.isSubmitted);
           state.currentModalAssignment.isGraded = Boolean(res.submission.isGraded);
 
+          let lockOrDescChanged = false;
+          if (typeof res.submission.assignmentIsLocked === 'boolean' && state.currentModalAssignment.isLocked !== res.submission.assignmentIsLocked) {
+            state.currentModalAssignment.isLocked = res.submission.assignmentIsLocked;
+            lockOrDescChanged = true;
+          }
+          if (res.submission.assignmentUnlockAt && !state.currentModalAssignment.unlockAt) {
+            state.currentModalAssignment.unlockAt = res.submission.assignmentUnlockAt;
+            lockOrDescChanged = true;
+          }
+          if (res.submission.assignmentLockAt && !state.currentModalAssignment.lockAt) {
+            state.currentModalAssignment.lockAt = res.submission.assignmentLockAt;
+            lockOrDescChanged = true;
+          }
           if ((!state.currentModalAssignment.description || !state.currentModalAssignment.description.trim()) && res.submission.assignmentDescription) {
             state.currentModalAssignment.description = res.submission.assignmentDescription;
-            if (descBox) {
-              descBox.innerHTML = utils.formatHtmlWithLinks(res.submission.assignmentDescription);
-              setupContentLinks(descBox, targetCourseId);
-            }
-          } else if ((!state.currentModalAssignment.description || !state.currentModalAssignment.description.trim()) && res.submission.assignmentLockExplanation) {
-            state.currentModalAssignment.lockExplanation = res.submission.assignmentLockExplanation;
-            if (descBox) {
-              descBox.innerHTML = renderLockedContentNotice(res.submission.assignmentLockExplanation, res.submission.assignmentHtmlUrl || assignment.htmlUrl);
-              setupContentLinks(descBox, targetCourseId);
-            }
+            lockOrDescChanged = true;
           }
-          
+          if (!state.currentModalAssignment.lockExplanation && res.submission.assignmentLockExplanation) {
+            state.currentModalAssignment.lockExplanation = res.submission.assignmentLockExplanation;
+            lockOrDescChanged = true;
+          }
+          if (!state.currentModalAssignment.htmlUrl && res.submission.assignmentHtmlUrl) {
+            state.currentModalAssignment.htmlUrl = res.submission.assignmentHtmlUrl;
+            lockOrDescChanged = true;
+          }
+
+          if (lockOrDescChanged) {
+            renderAssignmentDescriptionArea(state.currentModalAssignment);
+            renderAssignmentSubmissionPanel(state.currentModalAssignment);
+          }
+
           updateAssignmentModalStatusBadge(state.currentModalAssignment);
           renderAssignmentSubmissionHistory(res.submission, state.currentModalAssignment);
+
+          // ダッシュボード・講義資料・サイドバーバッジの提出状態を最新情報で即時同期
+          if (res.submission.isSubmitted || res.submission.isGraded) {
+            syncAssignmentSubmissionState(targetCourseId, targetAssignmentId, res.submission);
+          }
 
           // テキスト記述の復元
           if (res.submission.body) {
@@ -3228,8 +3541,15 @@ async function executeBulkSubmission() {
       showToast(`課題を提出しました（合計 ${totalCount} 件）`, 'success');
       triggerConfetti();
 
+      invalidateCourseMaterialsCache(courseId);
+      syncAssignmentSubmissionState(courseId, assignmentId, {
+        ...(res.result?.submission || {}),
+        isSubmitted: true
+      });
       await loadAllAssignments(true);
-      if (state.materialsCourseId) loadCourseMaterialsGrouped(state.materialsCourseId, true);
+      if (state.materialsCourseId && String(state.materialsCourseId) === String(courseId)) {
+        loadCourseMaterialsGrouped(state.materialsCourseId, true);
+      }
       setTimeout(() => {
         closeAssignmentModal();
       }, 1200);
@@ -3279,8 +3599,16 @@ async function executeTextSubmission() {
     if (res.success) {
       showToast('テキスト課題の提出が完了しました', 'success');
       triggerConfetti();
+      invalidateCourseMaterialsCache(courseId);
+      syncAssignmentSubmissionState(courseId, assignmentId, {
+        ...(res.submission || {}),
+        body: textBody,
+        isSubmitted: true
+      });
       await loadAllAssignments(true);
-      if (state.materialsCourseId) loadCourseMaterialsGrouped(state.materialsCourseId, true);
+      if (state.materialsCourseId && String(state.materialsCourseId) === String(courseId)) {
+        loadCourseMaterialsGrouped(state.materialsCourseId, true);
+      }
       setTimeout(() => {
         closeAssignmentModal();
       }, 1200);
@@ -3334,8 +3662,16 @@ async function executeUrlSubmission() {
     if (res.success) {
       showToast('URL課題の提出が完了しました', 'success');
       triggerConfetti();
+      invalidateCourseMaterialsCache(courseId);
+      syncAssignmentSubmissionState(courseId, assignmentId, {
+        ...(res.submission || {}),
+        url: inputUrl,
+        isSubmitted: true
+      });
       await loadAllAssignments(true);
-      if (state.materialsCourseId) loadCourseMaterialsGrouped(state.materialsCourseId, true);
+      if (state.materialsCourseId && String(state.materialsCourseId) === String(courseId)) {
+        loadCourseMaterialsGrouped(state.materialsCourseId, true);
+      }
       setTimeout(() => {
         closeAssignmentModal();
       }, 1200);
@@ -3481,6 +3817,84 @@ function setCachedMaterials(courseId, modules) {
   }
 }
 
+// 特定コースの講義資料クライアントキャッシュ（メモリ＋sessionStorage）を即時破棄
+function invalidateCourseMaterialsCache(courseId) {
+  if (!courseId) return;
+  const cacheKey = String(courseId);
+  state.materialsCache.delete(cacheKey);
+  try {
+    sessionStorage.removeItem(`canvas_horizon_materials_${cacheKey}`);
+  } catch (_) {}
+}
+
+// 課題提出・ステータス変更を全画面（ダッシュボード・講義資料・サイドバー）へ即時反映
+function syncAssignmentSubmissionState(courseId, assignmentId, submissionObj = {}) {
+  if (!assignmentId) return;
+  const cidStr = courseId ? String(courseId) : '';
+  const aidStr = String(assignmentId);
+  const isSub = Boolean(submissionObj.isSubmitted);
+  const isGrd = Boolean(submissionObj.isGraded);
+
+  let dashboardChanged = false;
+  if (Array.isArray(state.allAssignments)) {
+    state.allAssignments.forEach(a => {
+      if (String(a.id) === aidStr && (!cidStr || !a.courseId || String(a.courseId) === cidStr)) {
+        if (a.isSubmitted !== isSub || a.isGraded !== isGrd) {
+          dashboardChanged = true;
+        }
+        a.isSubmitted = isSub;
+        if (isGrd) a.isGraded = true;
+        a.submission = {
+          ...(a.submission || {}),
+          ...submissionObj
+        };
+      }
+    });
+  }
+
+  const updateModulesItems = (modules) => {
+    let changed = false;
+    if (!Array.isArray(modules)) return false;
+    modules.forEach(mod => {
+      (mod.items || []).forEach(it => {
+        if (it.type === 'Assignment' && (String(it.assignmentId) === aidStr || String(it.contentId) === aidStr || String(it.id) === aidStr)) {
+          if (it.isSubmitted !== isSub || it.isGraded !== isGrd) {
+            changed = true;
+          }
+          it.isSubmitted = isSub;
+          if (isGrd) it.isGraded = true;
+          it.submission = {
+            ...(it.submission || {}),
+            ...submissionObj
+          };
+        }
+      });
+    });
+    return changed;
+  };
+
+  const currentMatChanged = updateModulesItems(state.groupedMaterials);
+  if (cidStr) {
+    const cachedMods = getCachedMaterials(cidStr);
+    if (cachedMods) {
+      updateModulesItems(cachedMods);
+      setCachedMaterials(cidStr, cachedMods);
+    }
+  }
+
+  if (dashboardChanged) {
+    renderAssignmentsList();
+    renderSidebarCourses(state.courses);
+  } else {
+    updateAssignmentMetrics();
+    renderSidebarCourses(state.courses);
+  }
+
+  if (currentMatChanged && state.activeView === 'materials' && Array.isArray(state.groupedMaterials)) {
+    renderGroupedMaterials(state.groupedMaterials);
+  }
+}
+
 async function loadCourseMaterialsGrouped(courseId, forceRefresh = false) {
   if (!courseId) return;
   const container = document.getElementById('grouped-modules-container');
@@ -3592,7 +4006,7 @@ function renderGroupedMaterials(modules) {
           <span class="module-items-badge">${m.items.length}件</span>
         </div>
         ${totalSavable > 0 ? `
-          <button class="action-chip-btn btn-zip-module" style="font-weight: 700; color: #38bdf8; border-color: rgba(56, 189, 248, 0.35);" title="この回のファイル・動画をすべて保存します">
+          <button class="action-chip-btn action-download btn-zip-module" title="この回のファイル・動画をすべて保存します">
             <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
             この回の資料を保存 (${totalSavable}件)
           </button>
@@ -3667,18 +4081,35 @@ function renderGroupedMaterials(modules) {
       let isAssignmentSubmitted = false;
       let matchingAssign = null;
       if (isAssignment) {
-        matchingAssign = (state.allAssignments || []).find(a => 
-          (it.contentId && String(a.id) === String(it.contentId)) ||
-          (it.assignmentId && String(a.id) === String(it.assignmentId)) ||
-          (it.id && String(a.id) === String(it.id)) ||
-          (a.name && (a.name.trim() === title.trim() || a.name.includes(title) || title.includes(a.name)))
-        );
+        const currentCourseIdStr = String(it.courseId || state.materialsCourseId || '');
+        matchingAssign = (state.allAssignments || []).find(a => {
+          const sameCourse = !currentCourseIdStr || !a.courseId || String(a.courseId) === currentCourseIdStr;
+          if (!sameCourse) return false;
+          return (
+            (it.contentId && String(a.id) === String(it.contentId)) ||
+            (it.assignmentId && String(a.id) === String(it.assignmentId)) ||
+            (it.id && String(a.id) === String(it.id)) ||
+            (a.name && a.name.trim() === title.trim())
+          );
+        });
+
+        const assignTargetId = matchingAssign?.id || it.assignmentId || it.contentId || it.id;
+        const subObj = matchingAssign?.submission || it.submission || null;
+        const subState = String(subObj?.workflowState || subObj?.workflow_state || '').toLowerCase();
 
         isAssignmentSubmitted = Boolean(
           it.isSubmitted ||
+          it.isGraded ||
           matchingAssign?.isSubmitted ||
-          (matchingAssign?.submission && (matchingAssign.submission.workflowState === 'submitted' || matchingAssign.submission.workflowState === 'graded')) ||
-          (it.submission && (it.submission.workflowState === 'submitted' || it.submission.workflowState === 'graded'))
+          matchingAssign?.isGraded ||
+          isAssignmentManuallyCompleted(assignTargetId) ||
+          subState === 'submitted' ||
+          subState === 'graded' ||
+          subState === 'pending_review' ||
+          subState === 'complete' ||
+          Boolean(subObj?.submittedAt || subObj?.submitted_at) ||
+          (typeof subObj?.attempt === 'number' && subObj.attempt > 0) ||
+          (Array.isArray(subObj?.attachments) && subObj.attachments.length > 0)
         );
       }
 
@@ -3686,13 +4117,15 @@ function renderGroupedMaterials(modules) {
         iconClass = 'pdf';
         iconHtml = '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>';
       } else if (isQuiz) {
-        iconClass = 'quiz';
+        iconClass = isLockedItem ? 'other' : 'quiz';
         iconHtml = '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
       } else if (isPage || isDiscussion) {
         iconClass = 'page';
         iconHtml = '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>';
       } else if (isAssignment) {
-        iconClass = 'assignment';
+        iconClass = isAssignmentSubmitted
+          ? 'assignment-submitted'
+          : ((isLockedItem || matchingAssign?.isLocked) ? 'other' : 'assignment');
         iconHtml = '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>';
       } else if (ytId) {
         iconClass = 'video';
@@ -3705,17 +4138,17 @@ function renderGroupedMaterials(modules) {
         iconHtml = '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>';
       }
 
-      // サブテキストの表示（締切・配点・ロック状態）
+      // サブテキストの表示（締切・配点・種別）
       let metaHtml = '';
-      const lockBadgeHtml = isLockedItem ? `<span style="color: #fbbf24; font-weight: 600;">🔒 ロック中</span>` : '';
       if (isAssignment) {
         const assignData = matchingAssign || it;
         const dueAt = assignData.dueAt;
         const pointsPossible = assignData.pointsPossible;
         const pointsText = (typeof pointsPossible === 'number') ? `${pointsPossible}点` : '';
         const dueText = dueAt ? utils.formatDate(dueAt) : null;
+        const isLockedAssign = Boolean(isLockedItem || matchingAssign?.isLocked);
 
-        if (isAssignmentSubmitted) {
+        if (isAssignmentSubmitted || isLockedAssign) {
           const parts = [];
           if (dueText) parts.push(`締切: ${dueText}`);
           if (pointsText) parts.push(pointsText);
@@ -3742,39 +4175,66 @@ function renderGroupedMaterials(modules) {
       } else {
         metaHtml = `<span>リンク</span>`;
       }
-      if (lockBadgeHtml) {
-        metaHtml = `${lockBadgeHtml}${metaHtml ? ` <span>・</span> ${metaHtml}` : ''}`;
-      }
 
       // アクションボタンの生成（シンプル＆クリーン）
       let actionHtml = '';
       if (isFile) {
-        actionHtml = `
-          <button type="button" class="action-chip-btn action-download btn-file-direct-save" title="ダウンロードフォルダに保存">
-            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-            <span>保存</span>
-          </button>
-        `;
+        if (isLockedItem && !it.url && !it.id) {
+          actionHtml = `
+            <span class="action-chip-btn action-locked" title="詳細を確認">
+              <span>ロック中</span>
+            </span>
+          `;
+        } else {
+          actionHtml = `
+            <button type="button" class="action-chip-btn action-download btn-file-direct-save" title="ダウンロードフォルダに保存">
+              <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+              <span>保存</span>
+            </button>
+          `;
+        }
       } else if (isQuiz) {
-        actionHtml = `
-          <span class="action-chip-btn action-quiz btn-open-quiz-direct" title="小テスト・アンケートを受験">
-            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-            <span>回答</span>
-          </span>
-        `;
+        if (isLockedItem) {
+          actionHtml = `
+            <span class="action-chip-btn action-locked" title="詳細を確認">
+              <span>ロック中</span>
+            </span>
+          `;
+        } else {
+          actionHtml = `
+            <span class="action-chip-btn action-quiz btn-open-quiz-direct" title="小テスト・アンケートを受験">
+              <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+              <span>回答</span>
+            </span>
+          `;
+        }
       } else if (isPage || isDiscussion) {
-        actionHtml = `
-          <span class="action-chip-btn action-view" title="講義ノート・指示事項を表示">
-            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-            <span>閲覧</span>
-          </span>
-        `;
+        if (isLockedItem) {
+          actionHtml = `
+            <span class="action-chip-btn action-locked" title="詳細を確認">
+              <span>ロック中</span>
+            </span>
+          `;
+        } else {
+          actionHtml = `
+            <span class="action-chip-btn action-view" title="講義ノート・指示事項を表示">
+              <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+              <span>閲覧</span>
+            </span>
+          `;
+        }
       } else if (isAssignment) {
         if (isAssignmentSubmitted) {
           actionHtml = `
             <span class="action-chip-btn action-submitted" title="提出状況の確認・再提出">
               <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M5 13l4 4L19 7"/></svg>
-              <span>提出済み</span>
+              <span>提出済</span>
+            </span>
+          `;
+        } else if (isLockedItem || matchingAssign?.isLocked) {
+          actionHtml = `
+            <span class="action-chip-btn action-locked" title="詳細を確認">
+              <span>ロック中</span>
             </span>
           `;
         } else {
@@ -3913,6 +4373,9 @@ function renderGroupedMaterials(modules) {
         } else if (isAssignment) {
           const assignData = matchingAssign ? {
             ...matchingAssign,
+            isLocked: Boolean(matchingAssign.isLocked || it.isLocked || it.lockedForUser),
+            unlockAt: matchingAssign.unlockAt || it.unlockAt || null,
+            lockAt: matchingAssign.lockAt || it.lockAt || null,
             description: matchingAssign.description || it.description || '',
             lockExplanation: matchingAssign.lockExplanation || it.lockExplanation || null,
             htmlUrl: matchingAssign.htmlUrl || it.htmlUrl || it.url || ''
@@ -3923,6 +4386,9 @@ function renderGroupedMaterials(modules) {
             courseName: document.getElementById('material-course-select')?.selectedOptions[0]?.text || '',
             submissionTypes: it.submissionTypes || ['online_upload'],
             isSubmitted: isAssignmentSubmitted,
+            isLocked: Boolean(it.isLocked || it.lockedForUser),
+            unlockAt: it.unlockAt || null,
+            lockAt: it.lockAt || null,
             dueAt: it.dueAt,
             pointsPossible: it.pointsPossible,
             description: it.description || '',
@@ -4211,14 +4677,36 @@ function parseCsvRows(text, delimiter = ',') {
   return rows;
 }
 
-function openPdfPreviewModal(fileUrl, fileName, fileId = null, courseId = null) {
-  const cleanName = utils.normalizeFileName(fileName || 'document.pdf', 'document.pdf');
-  const category = utils.classifyFile(cleanName || fileUrl);
+async function openPdfPreviewModal(fileUrl, fileName, fileId = null, courseId = null) {
+  let rawName = utils.normalizeFileName(fileName || '', '');
+  let category = utils.classifyFile(rawName || fileUrl);
 
-  // 非プレビュー形式（.docx, .pptx, .xlsx, .zip など）が渡された場合は、PDFビューアで開かず即座に適切な拡張子でダウンロード！
-  if (category === 'download') {
+  // fileId が未指定でも URL から抽出を試みる
+  let resolvedFileId = fileId;
+  if (!resolvedFileId && fileUrl) {
+    const idMatch = String(fileUrl).match(/(?:[?&]id=|\/files\/)(\d+)/);
+    if (idMatch) resolvedFileId = idMatch[1];
+  }
+
+  // 拡張子不明のファイルはプレビューを開く前に Canvas API から正確なファイル名・MIMEを取得して判定
+  if (category === 'unknown' && resolvedFileId) {
+    try {
+      const metaRes = await api.get(`/api/files/meta?id=${encodeURIComponent(resolvedFileId)}&courseId=${encodeURIComponent(courseId || state.materialsCourseId || '')}`);
+      const metaFile = metaRes?.file || (metaRes?.success ? metaRes : null);
+      if (metaFile) {
+        const realName = utils.normalizeFileName(metaFile.displayName || metaFile.filename || rawName, rawName);
+        if (realName) rawName = realName;
+        category = utils.classifyFile(rawName || fileUrl, metaFile.contentType);
+      }
+    } catch (_) {}
+  }
+
+  const cleanName = rawName || (category === 'pdf' ? 'document.pdf' : 'download');
+
+  // 非プレビュー形式（.docx, .docs, .pptx, .xlsx, .zip など）や拡張子不明ファイルは、PDFビューアで開かず即座に適切な拡張子でダウンロード！
+  if (category === 'download' || !utils.isPreviewableCategory(category)) {
     downloadSingleFile({
-      id: fileId,
+      id: resolvedFileId,
       url: fileUrl,
       name: cleanName,
       courseId: courseId || state.materialsCourseId
@@ -4226,7 +4714,7 @@ function openPdfPreviewModal(fileUrl, fileName, fileId = null, courseId = null) 
     return;
   }
 
-  const targetKey = `pdf:${fileId || fileUrl || cleanName}`;
+  const targetKey = `pdf:${resolvedFileId || fileUrl || cleanName}`;
   modalNav.beforeOpen('pdf-modal', targetKey);
 
   const modal = document.getElementById('pdf-modal');
@@ -4236,7 +4724,7 @@ function openPdfPreviewModal(fileUrl, fileName, fileId = null, courseId = null) 
   const spinner = document.getElementById('pdf-loading-spinner');
 
   currentPdfFile = {
-    id: fileId,
+    id: resolvedFileId,
     url: fileUrl,
     name: cleanName,
     category,
@@ -4865,9 +5353,9 @@ function setupContentLinks(container, defaultCourseId = null) {
     // 拡張子が含まれている方を優先してファイル名を採用（例: text="第9回課題_GIシート-1.docx" または title="...docx"）
     let candidateName = text || title || '';
     if (!textExt && titleExt) {
-      candidateName = title;
+      candidateName = utils.extractCleanFileNameFromText(title, title);
     } else if (textExt) {
-      candidateName = text;
+      candidateName = utils.extractCleanFileNameFromText(text, text);
     }
     candidateName = utils.normalizeFileName(candidateName, '');
 
@@ -4912,7 +5400,7 @@ function setupContentLinks(container, defaultCourseId = null) {
           return;
         }
 
-        // 2. 拡張子が既に判明している非プレビュー形式（.docx, .pptx, .xlsx, .zip 等）は、PDFビューアを起動せず適切な拡張子で直接保存！
+        // 2. 拡張子が既に判明している非プレビュー形式（.docx, .docs, .pptx, .xlsx, .zip 等）は、PDFビューアを起動せず適切な拡張子で直接保存！
         if (fileCategory === 'download') {
           downloadSingleFile({
             id: fileId,
@@ -4927,9 +5415,10 @@ function setupContentLinks(container, defaultCourseId = null) {
         if (fileId) {
           try {
             const metaRes = await api.get(`/api/files/meta?id=${encodeURIComponent(fileId)}&courseId=${encodeURIComponent(resolvedCourseId || '')}&verifier=${encodeURIComponent(verifier)}`);
-            if (metaRes && metaRes.success && metaRes.file) {
-              const realName = utils.normalizeFileName(metaRes.file.displayName || safeName, safeName);
-              const realCat = utils.classifyFile(realName, metaRes.file.contentType);
+            const metaFile = metaRes?.file || (metaRes?.success ? metaRes : null);
+            if (metaFile) {
+              const realName = utils.normalizeFileName(metaFile.displayName || metaFile.filename || safeName, safeName);
+              const realCat = utils.classifyFile(realName, metaFile.contentType);
               if (utils.isPreviewableCategory(realCat)) {
                 const previewUrl = `/api/files/download?id=${fileId}&verifier=${encodeURIComponent(verifier)}&courseId=${resolvedCourseId || ''}&inline=true&name=${encodeURIComponent(realName)}`;
                 openPdfPreviewModal(previewUrl, realName, fileId, resolvedCourseId);
@@ -4937,7 +5426,7 @@ function setupContentLinks(container, defaultCourseId = null) {
               }
               downloadSingleFile({
                 id: fileId,
-                url: metaRes.file.url || href,
+                url: metaFile.url || href,
                 name: realName,
                 courseId: resolvedCourseId
               });
@@ -5533,13 +6022,14 @@ function setupCommandPalette() {
               subtitle: `${activeCourseName ? `${activeCourseName} • ` : ''}${m.name || 'モジュール'}`,
               action: () => {
                 closePalette();
-                if (isPdf && it.id) {
-                  openPdfPreviewModal(`/api/files/download?id=${it.id}&inline=true`, title, it.id, it.courseId || state.materialsCourseId);
+                const fileCat = isFile ? utils.classifyFile(title, it.contentType) : 'unknown';
+                if (isFile && utils.isPreviewableCategory(fileCat) && it.id) {
+                  openPdfPreviewModal(`/api/files/download?id=${it.id}&inline=true&name=${encodeURIComponent(title)}`, title, it.id, it.courseId || state.materialsCourseId);
                 } else if (isVideo) {
                   const ytId = utils.extractYouTubeVideoId(it.url || it.htmlUrl);
                   openYouTubeModal(ytId, title, it.url || it.htmlUrl);
                 } else if (isPage && it.pageUrl) {
-                  openPageModal(it.courseId || state.materialsCourseId, it.pageUrl, title);
+                  openPageModal(it.courseId || state.materialsCourseId, it.pageUrl, title, it);
                 } else if (isFile) {
                   downloadSingleFile({
                     id: it.id,

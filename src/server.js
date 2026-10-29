@@ -381,37 +381,84 @@ const EXT_TO_MIME = {
   '.pdf': 'application/pdf',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.doc': 'application/msword',
+  '.docs': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.docm': 'application/vnd.ms-word.document.macroEnabled.12',
+  '.dotx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.template',
+  '.dotm': 'application/vnd.ms-word.template.macroEnabled.12',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.xls': 'application/vnd.ms-excel',
+  '.xlsm': 'application/vnd.ms-excel.sheet.macroEnabled.12',
+  '.xlsb': 'application/vnd.ms-excel.sheet.binary.macroEnabled.12',
+  '.xltx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.template',
+  '.xltm': 'application/vnd.ms-excel.template.macroEnabled.12',
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptm': 'application/vnd.ms-powerpoint.presentation.macroEnabled.12',
+  '.ppsx': 'application/vnd.openxmlformats-officedocument.presentationml.slideshow',
+  '.ppsm': 'application/vnd.ms-powerpoint.slideshow.macroEnabled.12',
+  '.potx': 'application/vnd.openxmlformats-officedocument.presentationml.template',
+  '.potm': 'application/vnd.ms-powerpoint.template.macroEnabled.12',
+  '.vsdx': 'application/vnd.ms-visio.drawing',
+  '.vsd': 'application/vnd.visio',
+  '.one': 'application/onenote',
+  '.pub': 'application/x-mspublisher',
   '.odt': 'application/vnd.oasis.opendocument.text',
   '.ods': 'application/vnd.oasis.opendocument.spreadsheet',
   '.odp': 'application/vnd.oasis.opendocument.presentation',
+  '.odg': 'application/vnd.oasis.opendocument.graphics',
+  '.odf': 'application/vnd.oasis.opendocument.formula',
+  '.pages': 'application/vnd.apple.pages',
+  '.numbers': 'application/vnd.apple.numbers',
+  '.key': 'application/vnd.apple.keynote',
   '.rtf': 'application/rtf',
+  '.epub': 'application/epub+zip',
   '.zip': 'application/zip',
   '.7z': 'application/x-7z-compressed',
   '.rar': 'application/vnd.rar',
   '.tar': 'application/x-tar',
   '.gz': 'application/gzip',
   '.tgz': 'application/gzip',
+  '.bz2': 'application/x-bzip2',
+  '.xz': 'application/x-xz',
+  '.zst': 'application/zstd',
+  '.iso': 'application/x-iso9660-image',
+  '.jar': 'application/java-archive',
+  '.whl': 'application/zip',
   '.csv': 'text/csv; charset=utf-8',
   '.tsv': 'text/tab-separated-values; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
   '.log': 'text/plain; charset=utf-8',
   '.md': 'text/markdown; charset=utf-8',
+  '.markdown': 'text/markdown; charset=utf-8',
+  '.rst': 'text/plain; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
-  '.ipynb': 'application/json; charset=utf-8',
+  '.jsonl': 'application/json; charset=utf-8',
+  '.ipynb': 'application/x-ipynb+json',
   '.xml': 'application/xml; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
   '.htm': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
+  '.scss': 'text/plain; charset=utf-8',
+  '.less': 'text/plain; charset=utf-8',
   '.js': 'text/plain; charset=utf-8',
+  '.mjs': 'text/plain; charset=utf-8',
+  '.cjs': 'text/plain; charset=utf-8',
+  '.jsx': 'text/plain; charset=utf-8',
   '.ts': 'text/plain; charset=utf-8',
+  '.tsx': 'text/plain; charset=utf-8',
+  '.vue': 'text/plain; charset=utf-8',
+  '.svelte': 'text/plain; charset=utf-8',
   '.py': 'text/plain; charset=utf-8',
   '.java': 'text/plain; charset=utf-8',
+  '.kt': 'text/plain; charset=utf-8',
+  '.kts': 'text/plain; charset=utf-8',
+  '.scala': 'text/plain; charset=utf-8',
+  '.swift': 'text/plain; charset=utf-8',
+  '.dart': 'text/plain; charset=utf-8',
   '.c': 'text/plain; charset=utf-8',
   '.cpp': 'text/plain; charset=utf-8',
+  '.cc': 'text/plain; charset=utf-8',
+  '.cxx': 'text/plain; charset=utf-8',
   '.h': 'text/plain; charset=utf-8',
   '.hpp': 'text/plain; charset=utf-8',
   '.cs': 'text/plain; charset=utf-8',
@@ -419,16 +466,60 @@ const EXT_TO_MIME = {
   '.rs': 'text/plain; charset=utf-8',
   '.rb': 'text/plain; charset=utf-8',
   '.php': 'text/plain; charset=utf-8',
+  '.pl': 'text/plain; charset=utf-8',
+  '.lua': 'text/plain; charset=utf-8',
+  '.jl': 'text/plain; charset=utf-8',
+  '.hs': 'text/plain; charset=utf-8',
   '.sh': 'text/plain; charset=utf-8',
+  '.bash': 'text/plain; charset=utf-8',
+  '.zsh': 'text/plain; charset=utf-8',
   '.bat': 'text/plain; charset=utf-8',
+  '.cmd': 'text/plain; charset=utf-8',
   '.ps1': 'text/plain; charset=utf-8',
   '.sql': 'text/plain; charset=utf-8',
   '.yaml': 'text/plain; charset=utf-8',
   '.yml': 'text/plain; charset=utf-8',
   '.toml': 'text/plain; charset=utf-8',
   '.ini': 'text/plain; charset=utf-8',
+  '.cfg': 'text/plain; charset=utf-8',
+  '.conf': 'text/plain; charset=utf-8',
   '.r': 'text/plain; charset=utf-8',
+  '.rmd': 'text/plain; charset=utf-8',
+  '.m': 'text/plain; charset=utf-8',
+  '.mlx': 'application/octet-stream',
+  '.mat': 'application/x-matlab-data',
   '.tex': 'text/plain; charset=utf-8',
+  '.bib': 'text/plain; charset=utf-8',
+  '.sty': 'text/plain; charset=utf-8',
+  '.cls': 'text/plain; charset=utf-8',
+  '.v': 'text/plain; charset=utf-8',
+  '.sv': 'text/plain; charset=utf-8',
+  '.vhd': 'text/plain; charset=utf-8',
+  '.vhdl': 'text/plain; charset=utf-8',
+  '.ino': 'text/plain; charset=utf-8',
+  '.asm': 'text/plain; charset=utf-8',
+  '.dwg': 'image/vnd.dwg',
+  '.dxf': 'image/vnd.dxf',
+  '.stl': 'model/stl',
+  '.obj': 'model/obj',
+  '.fbx': 'application/octet-stream',
+  '.step': 'model/step',
+  '.stp': 'model/step',
+  '.iges': 'model/iges',
+  '.igs': 'model/iges',
+  '.blend': 'application/x-blender',
+  '.psd': 'image/vnd.adobe.photoshop',
+  '.ai': 'application/postscript',
+  '.eps': 'application/postscript',
+  '.sqlite': 'application/vnd.sqlite3',
+  '.sqlite3': 'application/vnd.sqlite3',
+  '.db': 'application/octet-stream',
+  '.parquet': 'application/vnd.apache.parquet',
+  '.h5': 'application/x-hdf5',
+  '.hdf5': 'application/x-hdf5',
+  '.sav': 'application/x-spss-sav',
+  '.rdata': 'application/octet-stream',
+  '.rds': 'application/octet-stream',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -437,31 +528,65 @@ const EXT_TO_MIME = {
   '.svg': 'image/svg+xml',
   '.bmp': 'image/bmp',
   '.ico': 'image/x-icon',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
+  '.heic': 'image/heic',
+  '.heif': 'image/heif',
+  '.avif': 'image/avif',
   '.mp4': 'video/mp4',
   '.m4v': 'video/mp4',
   '.webm': 'video/webm',
   '.mov': 'video/quicktime',
   '.mkv': 'video/x-matroska',
   '.avi': 'video/x-msvideo',
+  '.wmv': 'video/x-ms-wmv',
+  '.flv': 'video/x-flv',
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
   '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
   '.ogg': 'audio/ogg',
-  '.flac': 'audio/flac'
+  '.flac': 'audio/flac',
+  '.wma': 'audio/x-ms-wma',
+  '.mid': 'audio/midi',
+  '.midi': 'audio/midi',
+  '.srt': 'text/plain; charset=utf-8',
+  '.vtt': 'text/vtt; charset=utf-8'
 };
 
 const MIME_TO_EXT = {
   'application/pdf': '.pdf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
   'application/msword': '.doc',
+  'application/vnd.ms-word.document.macroenabled.12': '.docm',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.template': '.dotx',
+  'application/vnd.ms-word.template.macroenabled.12': '.dotm',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
   'application/vnd.ms-excel': '.xls',
+  'application/vnd.ms-excel.sheet.macroenabled.12': '.xlsm',
+  'application/vnd.ms-excel.sheet.binary.macroenabled.12': '.xlsb',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.template': '.xltx',
+  'application/vnd.ms-excel.template.macroenabled.12': '.xltm',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
   'application/vnd.ms-powerpoint': '.ppt',
+  'application/vnd.ms-powerpoint.presentation.macroenabled.12': '.pptm',
+  'application/vnd.openxmlformats-officedocument.presentationml.slideshow': '.ppsx',
+  'application/vnd.openxmlformats-officedocument.presentationml.template': '.potx',
+  'application/vnd.ms-visio.drawing': '.vsdx',
+  'application/vnd.visio': '.vsd',
+  'application/onenote': '.one',
+  'application/x-mspublisher': '.pub',
   'application/vnd.oasis.opendocument.text': '.odt',
   'application/vnd.oasis.opendocument.spreadsheet': '.ods',
   'application/vnd.oasis.opendocument.presentation': '.odp',
+  'application/vnd.oasis.opendocument.graphics': '.odg',
+  'application/vnd.oasis.opendocument.formula': '.odf',
+  'application/vnd.apple.pages': '.pages',
+  'application/vnd.apple.numbers': '.numbers',
+  'application/vnd.apple.keynote': '.key',
   'application/rtf': '.rtf',
+  'text/rtf': '.rtf',
+  'application/epub+zip': '.epub',
   'application/zip': '.zip',
   'application/x-zip-compressed': '.zip',
   'application/x-7z-compressed': '.7z',
@@ -470,6 +595,25 @@ const MIME_TO_EXT = {
   'application/x-tar': '.tar',
   'application/gzip': '.gz',
   'application/x-gzip': '.gz',
+  'application/x-bzip2': '.bz2',
+  'application/x-xz': '.xz',
+  'application/zstd': '.zst',
+  'application/java-archive': '.jar',
+  'application/x-ipynb+json': '.ipynb',
+  'application/x-matlab-data': '.mat',
+  'application/vnd.sqlite3': '.sqlite',
+  'application/x-sqlite3': '.sqlite',
+  'application/x-hdf5': '.h5',
+  'image/vnd.dwg': '.dwg',
+  'application/acad': '.dwg',
+  'image/vnd.dxf': '.dxf',
+  'model/stl': '.stl',
+  'application/sla': '.stl',
+  'model/obj': '.obj',
+  'model/step': '.step',
+  'model/iges': '.iges',
+  'image/vnd.adobe.photoshop': '.psd',
+  'application/postscript': '.eps',
   'text/csv': '.csv',
   'text/tab-separated-values': '.tsv',
   'text/plain': '.txt',
@@ -478,24 +622,59 @@ const MIME_TO_EXT = {
   'application/xml': '.xml',
   'text/xml': '.xml',
   'text/html': '.html',
+  'text/css': '.css',
+  'text/javascript': '.js',
+  'application/javascript': '.js',
+  'text/x-python': '.py',
+  'text/x-java-source': '.java',
+  'text/x-c': '.c',
+  'text/x-c++': '.cpp',
   'image/png': '.png',
   'image/jpeg': '.jpg',
   'image/gif': '.gif',
   'image/webp': '.webp',
   'image/svg+xml': '.svg',
   'image/bmp': '.bmp',
+  'image/tiff': '.tiff',
+  'image/heic': '.heic',
+  'image/heif': '.heif',
+  'image/avif': '.avif',
   'video/mp4': '.mp4',
   'application/mp4': '.mp4',
   'video/webm': '.webm',
   'video/quicktime': '.mov',
   'video/x-matroska': '.mkv',
+  'video/x-msvideo': '.avi',
+  'video/x-ms-wmv': '.wmv',
   'audio/mpeg': '.mp3',
   'audio/wav': '.wav',
   'audio/x-wav': '.wav',
   'audio/mp4': '.m4a',
+  'audio/aac': '.aac',
   'audio/ogg': '.ogg',
   'audio/flac': '.flac'
 };
+
+// 誤って末尾に付与された .pdf 二重拡張子（例: .docx.pdf, .pptx.pdf, .xlsx.pdf, .zip.pdf, .dwg.pdf, .docs.pdf 等）を除去
+function stripAccidentalPdfSuffix(fileName) {
+  if (!fileName || typeof fileName !== 'string') return '';
+  let cleaned = fileName.trim();
+  for (let i = 0; i < 3; i++) {
+    if (!/\.pdf$/i.test(cleaned)) break;
+    const withoutPdf = cleaned.slice(0, -4);
+    const prevExt = path.extname(withoutPdf).toLowerCase();
+    if (!prevExt) break;
+    // 既知の拡張子、または英字を含む1〜8文字の拡張子（v1.2.pdf のようなバージョン番号は除外）の場合に末尾の .pdf を除去
+    const isKnownExt = Boolean(EXT_TO_MIME[prevExt]);
+    const isLikelyRealExt = /^\.[a-z0-9]{1,8}$/i.test(prevExt) && /[a-z]/i.test(prevExt) && !/^\.v\d+$/i.test(prevExt);
+    if (isKnownExt || isLikelyRealExt) {
+      cleaned = withoutPdf;
+    } else {
+      break;
+    }
+  }
+  return cleaned;
+}
 
 // Content-Disposition ヘッダーから元ファイル名を抽出
 function extractFilenameFromContentDisposition(disposition) {
@@ -518,13 +697,11 @@ function extractFilenameFromContentDisposition(disposition) {
   return null;
 }
 
-// ファイル名と拡張子を精密に正規化（.docx.pdf 等の二重拡張子を防止し、本来の拡張子を補完）
+// ファイル名と拡張子を精密に正規化（.docx.pdf / .pptx.pdf / .xlsx.pdf 等の二重拡張子を防止し、本来の拡張子を補完）
 function normalizeDownloadFileName(rawName, fileData = null, contentDisposition = null, responseContentType = null) {
-  const doubleExtRegex = /\.(docx?|xlsx?|pptx?|odt|ods|odp|rtf|zip|7z|rar|tar|gz|tgz|csv|tsv|txt|log|md|json|ipynb|xml|html?|css|js|ts|py|java|c|cpp|h|hpp|cs|go|rs|rb|php|sh|bat|ps1|sql|yaml|yml|toml|ini|r|tex|png|jpe?g|gif|webp|svg|bmp|ico|mp4|m4v|webm|mov|mkv|avi|mp3|wav|m4a|ogg|flac)\.pdf$/i;
-
   let name = rawName ? String(rawName).replace(/[\r\n\t]+/g, ' ').trim() : '';
   if (name) {
-    name = name.replace(doubleExtRegex, '.$1');
+    name = stripAccidentalPdfSuffix(name);
   }
 
   const cdInput = (contentDisposition && String(contentDisposition).includes('filename'))
@@ -536,11 +713,11 @@ function normalizeDownloadFileName(rawName, fileData = null, contentDisposition 
 
   const cdName = extractFilenameFromContentDisposition(cdInput);
   const apiName = fileData ? (fileData.display_name || fileData.displayName || fileData.filename || null) : null;
-  const canonicalName = (apiName || cdName || '').trim();
+  const canonicalName = stripAccidentalPdfSuffix((apiName || cdName || '').trim());
 
   const isGenericName = !name || /^(file\.pdf|document\.pdf|download|file|添付ファイル)$/i.test(name);
   if (isGenericName && canonicalName) {
-    name = canonicalName.replace(doubleExtRegex, '.$1');
+    name = canonicalName;
   }
 
   if (!name) {
@@ -549,23 +726,28 @@ function normalizeDownloadFileName(rawName, fileData = null, contentDisposition 
 
   // 現在のファイル名に既知の拡張子が含まれているか確認
   const currentExt = path.extname(name).toLowerCase();
-  const hasKnownExt = Boolean(currentExt && (EXT_TO_MIME[currentExt] || /^\.[a-z0-9]{1,6}$/i.test(currentExt)));
+  const hasKnownExt = Boolean(currentExt && (EXT_TO_MIME[currentExt] || (/^\.[a-z0-9]{1,8}$/i.test(currentExt) && /[a-z]/i.test(currentExt))));
 
-  // もし rawName が "document.pdf" や "file.pdf" 以外でも、誤って .pdf が付与されており canonicalName が別拡張子を持つ場合は修正
+  const rawMime = (fileData && (fileData['content-type'] || fileData.content_type || fileData.contentType)) || mimeInput || '';
+  const cleanMime = String(rawMime).split(';')[0].trim().toLowerCase();
+  const mimeExt = (cleanMime && MIME_TO_EXT[cleanMime]) ? MIME_TO_EXT[cleanMime] : '';
   const canonicalExt = canonicalName ? path.extname(canonicalName).toLowerCase() : '';
-  if (currentExt === '.pdf' && canonicalExt && canonicalExt !== '.pdf' && EXT_TO_MIME[canonicalExt]) {
-    name = name.slice(0, -4) + canonicalExt;
+  const preferredNonPdfExt = (canonicalExt && canonicalExt !== '.pdf') ? canonicalExt : ((mimeExt && mimeExt !== '.pdf') ? mimeExt : '');
+
+  // もし rawName に誤って .pdf が付与されており、元ファイル名またはMIMEタイプが非PDF拡張子を示す場合は修正
+  if (currentExt === '.pdf' && preferredNonPdfExt) {
+    const stem = name.slice(0, -4);
+    name = stem.toLowerCase().endsWith(preferredNonPdfExt) ? stem : (stem + preferredNonPdfExt);
   } else if (!hasKnownExt) {
     if (canonicalExt) {
       name += canonicalExt;
-    } else {
-      const rawMime = (fileData && (fileData['content-type'] || fileData.content_type || fileData.contentType)) || mimeInput || '';
-      const cleanMime = String(rawMime).split(';')[0].trim().toLowerCase();
-      if (cleanMime && MIME_TO_EXT[cleanMime]) {
-        name += MIME_TO_EXT[cleanMime];
-      }
+    } else if (mimeExt) {
+      name += mimeExt;
     }
   }
+
+  // 再帰的に二重拡張子が残っていないか最終確認
+  name = stripAccidentalPdfSuffix(name);
 
   // OSファイルシステムで禁止されている文字を置換しつつ拡張子を保持して長さ制限
   const finalExt = path.extname(name);
@@ -791,8 +973,7 @@ app.get('/api/files/meta', async (req, res) => {
       false
     );
 
-    return res.json({
-      success: true,
+    const filePayload = {
       id: fileId,
       displayName,
       filename: (fileData && (fileData.filename || fileData.display_name)) || displayName,
@@ -802,6 +983,12 @@ app.get('/api/files/meta', async (req, res) => {
       isLocked: Boolean(fileData?.locked_for_user || fileData?.hidden_for_user),
       lockExplanation: fileData?.lock_explanation || fileData?.lock_info?.lock_explanation || null,
       unlockAt: fileData?.unlock_at || fileData?.lock_info?.unlock_at || null
+    };
+
+    return res.json({
+      success: true,
+      ...filePayload,
+      file: filePayload
     });
   } catch (err) {
     return res.json({
@@ -891,7 +1078,7 @@ app.get('/api/files/download', async (req, res) => {
       const lockMsg = fileData.lock_explanation || fileData.lock_info?.lock_explanation || 'このファイルは現在Canvas上でロックされています。';
       if (inline === 'true') {
         res.status(200).setHeader('Content-Type', 'text/html; charset=utf-8');
-        return res.send(`<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><style>body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#111420;color:#e2e8f0;font-family:sans-serif;padding:24px;box-sizing:border-box}.card{max-width:460px;background:#1a1f32;border:1px solid rgba(255,255,255,0.12);border-radius:16px;padding:28px;text-align:center;box-shadow:0 12px 32px rgba(0,0,0,0.4)}h3{margin:12px 0 8px;font-size:16px}p{margin:0;font-size:13.5px;color:#94a3b8;line-height:1.6}</style></head><body><div class="card"><div style="font-size:32px">🔒</div><h3>ファイルはロックされています</h3><p>${lockMsg.replace(/</g, '&lt;')}</p></div></body></html>`);
+        return res.send(`<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><style>body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#111420;color:#e2e8f0;font-family:sans-serif;padding:24px;box-sizing:border-box}.card{max-width:460px;background:#1a1f32;border:1px solid rgba(255,255,255,0.12);border-radius:16px;padding:28px;text-align:center;box-shadow:0 12px 32px rgba(0,0,0,0.4)}.lock-icon{width:44px;height:44px;margin:0 auto;border-radius:12px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.35);color:#fbbf24;display:flex;align-items:center;justify-content:center}h3{margin:14px 0 8px;font-size:16px}p{margin:0;font-size:13.5px;color:#94a3b8;line-height:1.6}</style></head><body><div class="card"><div class="lock-icon"><svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg></div><h3>ファイルはロックされています</h3><p>${lockMsg.replace(/</g, '&lt;')}</p></div></body></html>`);
       }
       return res.status(403).send(lockMsg);
     }
@@ -900,7 +1087,7 @@ app.get('/api/files/download', async (req, res) => {
       return res.status(400).send('Download URL or File ID required');
     }
 
-    const effectiveName = fileName || 'document.pdf';
+    const effectiveName = fileName || 'download';
     const extLower = path.extname(effectiveName).toLowerCase();
     const fileDataMime = String((fileData && (fileData['content-type'] || fileData.content_type)) || '').toLowerCase();
 
@@ -908,14 +1095,13 @@ app.get('/api/files/download', async (req, res) => {
                            Boolean(targetUrl && /\.(mp4|webm|mkv|mov|m4v|avi|ogv)(\?|$)/i.test(targetUrl)) ||
                            fileDataMime.startsWith('video/');
 
-    const isKnownNonPdfExt = Boolean(extLower && extLower !== '.pdf' && EXT_TO_MIME[extLower]);
+    const isKnownNonPdfExt = Boolean(extLower && extLower !== '.pdf');
     const isKnownNonPdfMime = Boolean(fileDataMime && !fileDataMime.includes('pdf') && !fileDataMime.includes('octet-stream'));
 
     const isPdfRequest = !isKnownNonPdfExt && !isKnownNonPdfMime && (
       extLower === '.pdf' ||
       Boolean(targetUrl && /\.pdf(\?|$)/i.test(targetUrl)) ||
-      fileDataMime === 'application/pdf' ||
-      (inline === 'true' && !isVideoRequest)
+      fileDataMime === 'application/pdf'
     );
 
     // 6. PDF かつ fileId がある場合、フルキャッシュを先行取得して Range 206 を完全サポート
@@ -923,7 +1109,10 @@ app.get('/api/files/download', async (req, res) => {
       try {
         const cachedPath = await ensurePdfCached(fileId, targetUrl, targetCourseId, effectiveName);
         if (fs.existsSync(cachedPath)) {
-          const encodedPdfName = encodeURIComponent(effectiveName.toLowerCase().endsWith('.pdf') ? effectiveName : `${effectiveName}.pdf`);
+          const pdfFileName = effectiveName.toLowerCase().endsWith('.pdf')
+            ? effectiveName
+            : (extLower ? effectiveName : `${effectiveName}.pdf`);
+          const encodedPdfName = encodeURIComponent(pdfFileName);
           res.setHeader('Content-Type', 'application/pdf');
           res.setHeader('Content-Disposition', `${dispositionType}; filename*=UTF-8''${encodedPdfName}`);
           res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -1736,7 +1925,7 @@ app.post('/api/youtube/download-legacy', async (req, res) => {
       if (err.code === 'ENOENT') {
         res.status(500).json({
           success: false,
-          error: 'システムに yt-dlp が見つかりませんでした。yt-dlp をインストールするか、アプリ内の「再生 ▶」をご利用ください。'
+          error: 'システムに yt-dlp が見つかりませんでした。yt-dlp をインストールするか、アプリ内の「再生」をご利用ください。'
         });
       } else {
         res.status(500).json({ success: false, error: err.message });

@@ -137,9 +137,9 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     const css = await cssRes.text();
     const js = await jsRes.text();
 
-    // 1. 絵文字（📌、🔥、📅等）や余計なアイコン枠が除外され、クリーンなテキスト見出しになっていること
-    assert.ok(!js.includes("title: '📌 来週以降の課題'"), 'Should not use pin emoji in later assignments title');
-    assert.ok(!js.includes("title: '🔥 今日〜明日締切"), 'Should not use fire emoji in urgent title');
+    // 1. 絵文字や余計なアイコン枠が除外され、クリーンなテキスト見出しになっていること
+    assert.ok(!js.includes("title: '\u{1F4CC} 来週以降の課題'"), 'Should not use pin emoji in later assignments title');
+    assert.ok(!js.includes("title: '\u{1F525} 今日〜明日締切"), 'Should not use fire emoji in urgent title');
     assert.ok(!js.includes('timeline-section-icon'), 'Should keep section headers clean and icon-free');
 
     // 2. セクションヘッダーから不要な区切りボーダー（横のバー）が排除されていること
@@ -394,6 +394,97 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     // 3. ロックされたページ・課題の案内表示 (.locked-content-notice) が実装されていること
     assert.ok(css.includes('.locked-content-notice'), 'CSS should style locked-content-notice');
     assert.ok(js.includes('renderLockedContentNotice'), 'JS should render locked content notice');
+  });
+
+  it('should prevent .ext.pdf double extensions for all non-PDF formats (.docs, .docx, .pptx, .xlsx, .zip, .ipynb, .dwg, .stl, etc.)', () => {
+    const { normalizeDownloadFileName, resolveContentType } = require('../src/server');
+
+    const cases = [
+      ['レポート課題.docs.pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'レポート課題.docs'],
+      ['レポート課題.docx.pdf', 'application/pdf', 'レポート課題.docx'],
+      ['発表スライド.pptx.pdf', 'application/pdf', '発表スライド.pptx'],
+      ['実験データ.xlsx.pdf', 'application/pdf', '実験データ.xlsx'],
+      ['提出アーカイブ.zip.pdf', 'application/zip', '提出アーカイブ.zip'],
+      ['演習ノート.ipynb.pdf', 'application/x-ipynb+json', '演習ノート.ipynb'],
+      ['CAD図面.dwg.pdf', 'image/vnd.dwg', 'CAD図面.dwg'],
+      ['3Dモデル.stl.pdf', 'model/stl', '3Dモデル.stl'],
+      ['MATLABデータ.mat.pdf', 'application/x-matlab-data', 'MATLABデータ.mat'],
+      ['構成図.vsdx.pdf', 'application/vnd.ms-visio.drawing', '構成図.vsdx']
+    ];
+
+    for (const [inputName, mime, expected] of cases) {
+      assert.strictEqual(
+        normalizeDownloadFileName(inputName, null, null, mime),
+        expected,
+        `Expected ${inputName} to normalize to ${expected}`
+      );
+    }
+
+    // 通常のバージョン番号付きPDF（例: report_v1.2.pdf）は .pdf を維持すること
+    assert.strictEqual(
+      normalizeDownloadFileName('report_v1.2.pdf', null, null, 'application/pdf'),
+      'report_v1.2.pdf'
+    );
+
+    // 汎用名（document.pdf / file.pdf）でも fileData や MIME から真の拡張子へ補正されること
+    assert.strictEqual(
+      normalizeDownloadFileName('document.pdf', { display_name: '第3回演習シート.docx' }, null, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+      '第3回演習シート.docx'
+    );
+    assert.strictEqual(
+      normalizeDownloadFileName('講義資料.pdf', { display_name: '講義資料.pptx' }, null, 'application/vnd.openxmlformats-officedocument.presentationml.presentation'),
+      '講義資料.pptx'
+    );
+    assert.strictEqual(
+      resolveContentType('課題テンプレート.docs', 'application/octet-stream'),
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    );
+  });
+
+  it('should refine locked assignment UI, implement utils.stripHtml, sync submission states, and eliminate all emojis', async () => {
+    const [htmlRes, cssRes, jsRes] = await Promise.all([
+      fetch(`${baseUrl}/`),
+      fetch(`${baseUrl}/css/style.css`),
+      fetch(`${baseUrl}/js/app.js`)
+    ]);
+    const html = await htmlRes.text();
+    const css = await cssRes.text();
+    const js = await jsRes.text();
+
+    // 1. utils.stripHtml・課題提出状態同期関数が実装されていること
+    assert.ok(js.includes('stripHtml(html)'), 'utils.stripHtml should be defined in app.js');
+    assert.ok(js.includes('extractCleanFileNameFromText'), 'utils.extractCleanFileNameFromText should be defined in app.js');
+    assert.ok(js.includes('function syncAssignmentSubmissionState'), 'syncAssignmentSubmissionState should be defined in app.js');
+    assert.ok(js.includes('function invalidateCourseMaterialsCache'), 'invalidateCourseMaterialsCache should be defined in app.js');
+    assert.ok(js.includes('function isAssignmentActivePending'), 'isAssignmentActivePending should be defined in app.js');
+
+    // 2. ロックされた課題の専用UI（提出パネルのロック案内・ロック中チップ・スケジュールグリッド）が実装されていること
+    assert.ok(html.includes('id="modal-locked-notice"'), 'HTML should include #modal-locked-notice in assignment modal');
+    assert.ok(css.includes('.locked-submission-card'), 'CSS should style .locked-submission-card');
+    assert.ok(css.includes('.action-chip-btn.action-locked'), 'CSS should style .action-locked chip');
+    assert.ok(css.includes('.badge-locked'), 'CSS should style .badge-locked');
+    assert.ok(js.includes('renderAssignmentSubmissionPanel'), 'JS should define renderAssignmentSubmissionPanel');
+    assert.ok(js.includes('renderAssignmentDescriptionArea'), 'JS should define renderAssignmentDescriptionArea');
+
+    // 3. 絵文字がフロントエンド・バックエンドから完全に排除されていること
+    const forbiddenEmojis = ['\u{1F512}', '\u{1F319}', '\u{2600}', '\u{1F4CC}', '\u{1F525}'];
+    for (const emoji of forbiddenEmojis) {
+      assert.ok(!html.includes(emoji), `index.html should not contain emoji ${emoji}`);
+      assert.ok(!css.includes(emoji), `style.css should not contain emoji ${emoji}`);
+      assert.ok(!js.includes(emoji), `app.js should not contain emoji ${emoji}`);
+    }
+  });
+
+  it('should keep repository clean and minimal without docs/ folder while preserving built-in app.asar updater support', () => {
+    const rootDir = path.join(__dirname, '..');
+    assert.strictEqual(fs.existsSync(path.join(rootDir, 'docs')), false, 'docs folder should be removed');
+    assert.strictEqual(fs.existsSync(path.join(rootDir, 'src-tauri')), false, 'unused src-tauri folder should be removed');
+    assert.strictEqual(fs.existsSync(path.join(rootDir, 'src-rust')), false, 'unused src-rust folder should be removed');
+
+    const mainJs = fs.readFileSync(path.join(rootDir, 'src', 'main.js'), 'utf-8');
+    assert.ok(mainJs.includes('checkAsarUpdate'), 'src/main.js should include checkAsarUpdate for built-in hot updates');
+    assert.ok(mainJs.includes('start-download-update'), 'src/main.js should handle start-download-update');
+    assert.ok(mainJs.includes('quit-and-install'), 'src/main.js should handle quit-and-install');
   });
 });
 

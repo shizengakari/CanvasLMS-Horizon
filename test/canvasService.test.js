@@ -82,4 +82,70 @@ describe('CanvasService Cache & Performance Whitebox Tests', () => {
       canvasService.fetchJson = origFetchJson;
     }
   });
+
+  it('should accurately detect submitted assignments across pending_review, submitted_at, attempt, excused, and read-replica lag', async () => {
+    const origFetchJson = canvasService.fetchJson;
+    try {
+      // 1. getAssignmentSubmission (/submissions/self) で提出確認された課題が submittedOverrides に記録されること
+      canvasService.fetchJson = async (endpoint) => {
+        if (endpoint.includes('/submissions/self')) {
+          return {
+            id: 5001,
+            assignment_id: 204,
+            workflow_state: 'unsubmitted',
+            submitted_at: '2026-10-28T12:00:00Z',
+            attempt: 1,
+            attachments: [{ id: 901, display_name: 'report.docx', filename: 'report.docx', size: 1024 }]
+          };
+        }
+        return [
+          {
+            id: 201,
+            course_id: 55,
+            name: 'LTI・Turnitin課題 (pending_review)',
+            submission: { id: 1, workflow_state: 'pending_review', attempt: 1 }
+          },
+          {
+            id: 202,
+            course_id: 55,
+            name: 'タイムスタンプ付き課題 (submitted_at)',
+            submission: { id: 2, workflow_state: 'unsubmitted', submitted_at: '2026-10-28T10:00:00Z', attempt: 1 }
+          },
+          {
+            id: 203,
+            course_id: 55,
+            name: '免除課題 (excused)',
+            submission: { id: 3, workflow_state: 'unsubmitted', excused: true }
+          },
+          {
+            id: 204,
+            course_id: 55,
+            name: 'レプリカラグで一覧APIが古いunsubmittedを返す課題',
+            submission: { id: 4, workflow_state: 'unsubmitted', submitted_at: null, attempt: null }
+          },
+          {
+            id: 205,
+            course_id: 55,
+            name: '本当に未提出の課題',
+            submission: { id: 5, workflow_state: 'unsubmitted', submitted_at: null, attempt: null }
+          }
+        ];
+      };
+
+      const selfSub = await canvasService.getAssignmentSubmission('55', '204');
+      assert.strictEqual(selfSub.isSubmitted, true, 'Submission with submitted_at and attachment should be marked isSubmitted');
+
+      const list = await canvasService.getAssignments('55', true);
+      const map = new Map(list.map(a => [a.id, a]));
+
+      assert.strictEqual(map.get(201).isSubmitted, true, 'pending_review should be treated as submitted');
+      assert.strictEqual(map.get(202).isSubmitted, true, 'submission with submitted_at should be treated as submitted');
+      assert.strictEqual(map.get(203).isSubmitted, true, 'excused submission should be treated as submitted');
+      assert.strictEqual(map.get(204).isSubmitted, true, 'submittedOverrides should prevent read-replica lag from reverting submitted status');
+      assert.strictEqual(map.get(204).submission.attachments.length, 1, 'submittedOverrides should preserve submitted attachment metadata');
+      assert.strictEqual(map.get(205).isSubmitted, false, 'truly unsubmitted assignment should remain false');
+    } finally {
+      canvasService.fetchJson = origFetchJson;
+    }
+  });
 });

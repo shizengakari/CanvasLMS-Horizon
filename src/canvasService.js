@@ -72,6 +72,61 @@ function cleanCourseName(courseName) {
   return cleaned || courseName;
 }
 
+// Canvas LMS の提出オブジェクトから提出済みかどうかを包括的に判定
+function isSubmissionCompleted(sub) {
+  if (!sub || typeof sub !== 'object') return false;
+  const state = String(sub.workflow_state || sub.workflowState || '').toLowerCase();
+  if (state === 'submitted' || state === 'graded' || state === 'pending_review' || state === 'complete') {
+    return true;
+  }
+  if (Boolean(sub.excused)) return true;
+  if (Boolean(sub.submitted_at || sub.submittedAt)) return true;
+  if (typeof sub.attempt === 'number' && sub.attempt > 0) return true;
+  if (Array.isArray(sub.attachments) && sub.attachments.length > 0) return true;
+  if (typeof sub.body === 'string' && sub.body.trim().length > 0) return true;
+  if (typeof sub.url === 'string' && sub.url.trim().length > 0) return true;
+  if (sub.score !== null && sub.score !== undefined && state !== 'unsubmitted') return true;
+  if (sub.grade !== null && sub.grade !== undefined && String(sub.grade).trim() !== '' && state !== 'unsubmitted') return true;
+  if (Array.isArray(sub.submission_history)) {
+    for (const hist of sub.submission_history) {
+      if (!hist || typeof hist !== 'object') continue;
+      const hState = String(hist.workflow_state || '').toLowerCase();
+      if (
+        hState === 'submitted' ||
+        hState === 'graded' ||
+        hState === 'pending_review' ||
+        hState === 'complete' ||
+        Boolean(hist.submitted_at) ||
+        (typeof hist.attempt === 'number' && hist.attempt > 0) ||
+        (Array.isArray(hist.attachments) && hist.attachments.length > 0)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function isSubmissionGraded(sub) {
+  if (!sub || typeof sub !== 'object') return false;
+  const state = String(sub.workflow_state || sub.workflowState || '').toLowerCase();
+  if (state === 'graded' || state === 'complete') return true;
+  if (sub.score !== null && sub.score !== undefined && Boolean(sub.graded_at || sub.gradedAt)) return true;
+  return false;
+}
+
+function parseNextLink(linkHeader) {
+  if (!linkHeader || typeof linkHeader !== 'string') return null;
+  const parts = linkHeader.split(',');
+  for (const part of parts) {
+    const match = part.match(/<([^>]+)>\s*;\s*rel="next"/i);
+    if (match && match[1]) {
+      return match[1];
+    }
+  }
+  return null;
+}
+
 class CanvasService {
   constructor() {
     this.cache = {
@@ -84,7 +139,8 @@ class CanvasService {
       modules: new Map(),
       files: new Map(),
       groupedMaterials: new Map(), // 授業回別講義資料のキャッシュ
-      resolvedUrls: new Map()
+      resolvedUrls: new Map(),
+      submittedOverrides: new Map() // 提出完了確認済み課題の永続オーバーライド（Canvasレプリカラグ対策）
     };
     // バッテリー消費削減のため、キャッシュ有効期間を現実的な講義サイクルに合わせて最適化
     this.CACHE_TTL = 15 * 60 * 1000; // 15分（課題一覧など）
@@ -159,6 +215,15 @@ class CanvasService {
             this.cache.courses = parsed.courses;
             this.cache.coursesTime = parsed.coursesTime || 0;
           }
+          if (parsed.submittedOverrides && typeof parsed.submittedOverrides === 'object') {
+            const maxAgeMs = 180 * 24 * 60 * 60 * 1000;
+            const now = Date.now();
+            for (const [k, v] of Object.entries(parsed.submittedOverrides)) {
+              if (v && (!v.updatedAt || now - v.updatedAt < maxAgeMs)) {
+                this.cache.submittedOverrides.set(k, v);
+              }
+            }
+          }
           // スキーマバージョンが一致する場合のみ詳細キャッシュを復元（ロック情報・URL正規化の整合性保証）
           if (parsed.schemaVersion === 2) {
             if (Array.isArray(parsed.allAssignments)) {
@@ -196,6 +261,12 @@ class CanvasService {
         for (const [k, v] of this.cache.groupedMaterials.entries()) {
           groupedMaterialsObj[k] = v;
         }
+        const submittedOverridesObj = {};
+        if (this.cache.submittedOverrides) {
+          for (const [k, v] of this.cache.submittedOverrides.entries()) {
+            submittedOverridesObj[k] = v;
+          }
+        }
         const data = {
           schemaVersion: 2,
           profile: this.cache.profile,
@@ -204,7 +275,8 @@ class CanvasService {
           allAssignments: this.cache.allAssignments,
           allAssignmentsTime: this.cache.allAssignmentsTime,
           assignments: assignmentsObj,
-          groupedMaterials: groupedMaterialsObj
+          groupedMaterials: groupedMaterialsObj,
+          submittedOverrides: submittedOverridesObj
         };
         fs.promises.writeFile(this.cacheFilePath, JSON.stringify(data), 'utf-8').catch(() => {});
       } catch (e) {
@@ -219,6 +291,9 @@ class CanvasService {
   // 全キャッシュのクリア（メモリ・ディスク両方）
   clearAllCache(keepProfile = true) {
     const profile = keepProfile ? this.cache.profile : null;
+    const submittedOverrides = keepProfile && this.cache.submittedOverrides
+      ? new Map(this.cache.submittedOverrides)
+      : new Map();
     this.cache = {
       profile,
       courses: null,
@@ -229,12 +304,21 @@ class CanvasService {
       modules: new Map(),
       files: new Map(),
       groupedMaterials: new Map(),
-      resolvedUrls: new Map()
+      resolvedUrls: new Map(),
+      submittedOverrides
     };
     try {
       if (fs.existsSync(this.cacheFilePath)) {
-        if (profile) {
-          fs.writeFileSync(this.cacheFilePath, JSON.stringify({ profile }, null, 2), 'utf-8');
+        if (profile || submittedOverrides.size > 0) {
+          const submittedOverridesObj = {};
+          for (const [k, v] of submittedOverrides.entries()) {
+            submittedOverridesObj[k] = v;
+          }
+          fs.writeFileSync(
+            this.cacheFilePath,
+            JSON.stringify({ schemaVersion: 2, profile, submittedOverrides: submittedOverridesObj }, null, 2),
+            'utf-8'
+          );
         } else {
           fs.unlinkSync(this.cacheFilePath);
         }
@@ -242,6 +326,96 @@ class CanvasService {
     } catch (e) {
       console.warn('Failed to clear cache file:', e.message);
     }
+  }
+
+  // 提出完了が確認された課題のステータスを即時記録（Canvasレプリカラグによる未提出への先祖返りを防止）
+  recordSubmittedOverride(courseId, assignmentId, subData = {}) {
+    if (!courseId || !assignmentId) return;
+    if (!this.cache.submittedOverrides) {
+      this.cache.submittedOverrides = new Map();
+    }
+    const key = `${courseId}_${assignmentId}`;
+    const existing = this.cache.submittedOverrides.get(key) || {};
+    const override = {
+      courseId: String(courseId),
+      assignmentId: String(assignmentId),
+      isSubmitted: true,
+      isGraded: Boolean(isSubmissionGraded(subData) || existing.isGraded),
+      submittedAt: subData.submitted_at || subData.submittedAt || existing.submittedAt || new Date().toISOString(),
+      workflowState: subData.workflow_state || subData.workflowState || existing.workflowState || 'submitted',
+      attempt: subData.attempt || existing.attempt || 1,
+      score: subData.score !== undefined ? subData.score : (existing.score ?? null),
+      grade: subData.grade !== undefined ? subData.grade : (existing.grade ?? null),
+      body: subData.body || existing.body || null,
+      url: subData.url || existing.url || null,
+      attachments: Array.isArray(subData.attachments) && subData.attachments.length > 0
+        ? subData.attachments.map(att => ({
+            id: att.id,
+            displayName: att.displayName || att.display_name || att.filename,
+            filename: att.filename || att.displayName || att.display_name,
+            size: att.size || 0,
+            contentType: att.contentType || att['content-type'] || att.content_type,
+            url: att.url,
+            createdAt: att.createdAt || att.created_at
+          }))
+        : (existing.attachments || []),
+      updatedAt: Date.now()
+    };
+    this.cache.submittedOverrides.set(key, override);
+
+    // インメモリキャッシュ内の課題一覧・全体課題・講義資料も即時同期
+    for (const [, entry] of this.cache.assignments.entries()) {
+      if (entry && Array.isArray(entry.data)) {
+        entry.data.forEach(a => {
+          if (String(a.id) === String(assignmentId) && String(a.courseId) === String(courseId)) {
+            a.isSubmitted = true;
+            if (override.isGraded) a.isGraded = true;
+            a.submission = {
+              ...(a.submission || {}),
+              submittedAt: override.submittedAt,
+              workflowState: override.workflowState,
+              attempt: override.attempt,
+              score: override.score,
+              grade: override.grade,
+              body: override.body,
+              url: override.url,
+              attachments: override.attachments.length > 0 ? override.attachments : (a.submission?.attachments || [])
+            };
+          }
+        });
+      }
+    }
+    if (Array.isArray(this.cache.allAssignments)) {
+      this.cache.allAssignments.forEach(a => {
+        if (String(a.id) === String(assignmentId) && String(a.courseId) === String(courseId)) {
+          a.isSubmitted = true;
+          if (override.isGraded) a.isGraded = true;
+          a.submission = {
+            ...(a.submission || {}),
+            submittedAt: override.submittedAt,
+            workflowState: override.workflowState,
+            attempt: override.attempt,
+            score: override.score,
+            grade: override.grade,
+            body: override.body,
+            url: override.url,
+            attachments: override.attachments.length > 0 ? override.attachments : (a.submission?.attachments || [])
+          };
+        }
+      });
+    }
+    const matEntry = this.cache.groupedMaterials.get(String(courseId));
+    if (matEntry && Array.isArray(matEntry.data)) {
+      matEntry.data.forEach(mod => {
+        (mod.items || []).forEach(it => {
+          if (it.type === 'Assignment' && (String(it.assignmentId) === String(assignmentId) || String(it.id) === String(assignmentId))) {
+            it.isSubmitted = true;
+            if (override.isGraded) it.isGraded = true;
+          }
+        });
+      });
+    }
+    this.saveDiskCacheDebounced();
   }
 
   getConfig() {
@@ -341,14 +515,33 @@ class CanvasService {
     const baseUrl = this.getBaseUrl();
     const url = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`;
 
-    // 同一GETリクエストの重複排除
+    // 同一GETリクエストの重複排除およびページネーション自動追従
     if (isGet) {
       if (this.inflightRequests.has(url)) {
         return this.inflightRequests.get(url);
       }
       const promise = (async () => {
         const res = await this.request(url, options);
-        return await res.json();
+        const firstPage = await res.json();
+        const linkHeader = res.headers && typeof res.headers.get === 'function' ? res.headers.get('Link') : null;
+        let nextUrl = Array.isArray(firstPage) ? parseNextLink(linkHeader) : null;
+        if (!nextUrl) return firstPage;
+
+        const combined = [...firstPage];
+        let pageCount = 1;
+        while (nextUrl && pageCount < 5) {
+          pageCount++;
+          const nextRes = await this.request(nextUrl, options);
+          const nextData = await nextRes.json();
+          if (Array.isArray(nextData)) {
+            combined.push(...nextData);
+          } else {
+            break;
+          }
+          const nextLink = nextRes.headers && typeof nextRes.headers.get === 'function' ? nextRes.headers.get('Link') : null;
+          nextUrl = parseNextLink(nextLink);
+        }
+        return combined;
       })().finally(() => {
         this.inflightRequests.delete(url);
       });
@@ -477,12 +670,31 @@ class CanvasService {
         })
         .map(a => {
           const sub = a.submission || null;
-          const isSubmitted = sub && (sub.workflow_state === 'submitted' || sub.workflow_state === 'graded');
-          const isGraded = sub && sub.workflow_state === 'graded';
+          const effectiveCourseId = a.course_id || courseId;
+          const override = this.cache.submittedOverrides?.get(`${effectiveCourseId}_${a.id}`) ||
+                           this.cache.submittedOverrides?.get(`${courseId}_${a.id}`) ||
+                           null;
+          const rawSubmitted = isSubmissionCompleted(sub) ||
+            Boolean(a.has_submitted_submissions && sub && String(sub.workflow_state || '').toLowerCase() !== 'unsubmitted');
+          const isSubmitted = Boolean(rawSubmitted || (override && override.isSubmitted));
+          const isGraded = Boolean(isSubmissionGraded(sub) || (override && override.isGraded));
+
+          const mappedAttachments = sub && Array.isArray(sub.attachments) && sub.attachments.length > 0
+            ? sub.attachments.map(att => ({
+                id: att.id,
+                displayName: att.display_name || att.displayName || att.filename,
+                filename: att.filename || att.display_name || att.displayName,
+                size: att.size,
+                contentType: att.content_type || att['content-type'] || att.contentType,
+                url: att.url,
+                createdAt: att.created_at || att.createdAt
+              }))
+            : (override?.attachments || []);
 
           return {
             id: a.id,
-            courseId: a.course_id || courseId,
+            courseId: effectiveCourseId,
+            quizId: a.quiz_id || null,
             name: a.name || '無題の課題',
             description: a.description || '',
             dueAt: a.due_at,
@@ -497,23 +709,17 @@ class CanvasService {
             htmlUrl: a.html_url,
             isSubmitted,
             isGraded,
-            submission: sub ? {
-              id: sub.id,
-              submittedAt: sub.submitted_at,
-              score: sub.score,
-              grade: sub.grade,
-              workflowState: sub.workflow_state,
-              attempt: sub.attempt,
-              attachments: (sub.attachments || []).map(att => ({
-                id: att.id,
-                displayName: att.display_name,
-                filename: att.filename,
-                size: att.size,
-                contentType: att.content_type,
-                url: att.url,
-                createdAt: att.created_at
-              })),
-              submissionComments: (sub.submission_comments || []).map(sc => ({
+            submission: (sub || override) ? {
+              id: sub?.id || null,
+              submittedAt: sub?.submitted_at || override?.submittedAt || null,
+              score: sub?.score ?? override?.score ?? null,
+              grade: sub?.grade ?? override?.grade ?? null,
+              workflowState: (rawSubmitted ? sub?.workflow_state : (override?.workflowState || sub?.workflow_state)) || (isSubmitted ? 'submitted' : 'unsubmitted'),
+              attempt: sub?.attempt || override?.attempt || (isSubmitted ? 1 : null),
+              body: sub?.body || override?.body || null,
+              url: sub?.url || override?.url || null,
+              attachments: mappedAttachments,
+              submissionComments: (sub?.submission_comments || []).map(sc => ({
                 id: sc.id,
                 authorName: sc.author_name,
                 comment: sc.comment,
@@ -612,7 +818,7 @@ class CanvasService {
 
     let modules = [];
     try {
-      modules = await this.fetchJson(`/api/v1/courses/${courseId}/modules?include[]=items&per_page=100`);
+      modules = await this.fetchJson(`/api/v1/courses/${courseId}/modules?include[]=items&include[]=content_details&per_page=100`);
     } catch (e) {
       console.warn(`Could not fetch modules for course ${courseId}:`, e.message);
       modules = [];
@@ -633,32 +839,36 @@ class CanvasService {
         unlockAt: m.unlock_at || null,
         isLocked: isModuleLocked,
         items: (m.items || []).map(it => {
-          const itemUnlockAt = it.unlock_at || it.lock_info?.unlock_at || null;
+          const itemUnlockAt = it.unlock_at || it.lock_info?.unlock_at || it.content_details?.unlock_at || null;
           const isItemLocked = Boolean(
             it.locked_for_user ||
+            it.content_details?.locked_for_user ||
             it.workflow_state === 'unpublished' ||
             it.published === false ||
             isModuleLocked ||
             (itemUnlockAt && new Date(itemUnlockAt) > new Date())
           );
           const isItemPublished = it.published !== false && it.workflow_state !== 'unpublished' && isModulePublished;
+          const isItemCompleted = Boolean(it.completion_requirement && it.completion_requirement.completed);
 
           return {
             id: it.id,
             title: it.title,
             type: it.type, // 'File', 'Assignment', 'Page', 'ExternalUrl', 'Quiz' など
             contentId: it.content_id,
+            quizId: it.content_details?.quiz_id || (it.type === 'Quiz' ? it.content_id : null) || null,
             pageUrl: it.page_url || null,
             htmlUrl: it.html_url,
             url: it.url, // ファイル解決用API URL
             externalUrl: it.external_url || null,
             published: isItemPublished,
             workflowState: it.workflow_state || null,
-            lockedForUser: Boolean(it.locked_for_user),
+            isCompleted: isItemCompleted,
+            lockedForUser: Boolean(it.locked_for_user || it.content_details?.locked_for_user),
             isLocked: isItemLocked,
-            lockInfo: it.lock_info || null,
+            lockInfo: it.lock_info || it.content_details?.lock_info || null,
             unlockAt: itemUnlockAt,
-            lockExplanation: it.lock_explanation || it.lock_info?.lock_explanation || null
+            lockExplanation: it.lock_explanation || it.lock_info?.lock_explanation || it.content_details?.lock_explanation || null
           };
         })
       };
@@ -798,9 +1008,11 @@ class CanvasService {
     files.forEach(f => fileMapById.set(String(f.id), f));
 
     const assignMapById = new Map();
+    const assignMapByQuizId = new Map();
     const assignMapByName = new Map();
     (assignments || []).forEach(a => {
       assignMapById.set(String(a.id), a);
+      if (a.quizId) assignMapByQuizId.set(String(a.quizId), a);
       if (a.name) assignMapByName.set(a.name.trim(), a);
     });
 
@@ -860,19 +1072,31 @@ class CanvasService {
             ...commonProps
           });
         } else if (it.type === 'Assignment') {
-          const assign = assignMapById.get(String(it.contentId)) || 
+          const assign = assignMapById.get(String(it.contentId)) ||
+                         (it.quizId ? assignMapByQuizId.get(String(it.quizId)) : null) ||
                          assignMapById.get(String(it.id)) ||
                          assignMapByName.get((it.title || '').trim()) || null;
+          const effectiveAssignId = assign?.id || it.contentId || it.id;
+          const override = this.cache.submittedOverrides?.get(`${courseId}_${effectiveAssignId}`) || null;
+          const isItemSubmitted = Boolean(
+            (assign && assign.isSubmitted) ||
+            (override && override.isSubmitted) ||
+            it.isCompleted
+          );
+          const isItemGraded = Boolean(
+            (assign && assign.isGraded) ||
+            (override && override.isGraded)
+          );
           moduleFiles.push({
-            id: it.contentId || it.id,
+            id: effectiveAssignId,
             itemId: it.id,
             title: it.title,
             type: 'Assignment',
-            assignmentId: it.contentId || it.id,
+            assignmentId: effectiveAssignId,
             description: assign?.description || '',
             htmlUrl: assign?.htmlUrl || it.htmlUrl,
-            isSubmitted: assign ? Boolean(assign.isSubmitted) : false,
-            isGraded: assign ? Boolean(assign.isGraded) : false,
+            isSubmitted: isItemSubmitted,
+            isGraded: isItemGraded,
             dueAt: assign?.dueAt || null,
             pointsPossible: assign?.pointsPossible ?? null,
             submission: assign?.submission || null,
@@ -1196,12 +1420,19 @@ class CanvasService {
 
     const submissionData = await submitRes.json();
 
-    // キャッシュの無効化
+    // 提出完了オーバーライドを記録（Canvasレプリカラグ対策）およびキャッシュ無効化
+    this.recordSubmittedOverride(courseId, assignmentId, {
+      ...(submissionData || {}),
+      attachments: (Array.isArray(submissionData?.attachments) && submissionData.attachments.length > 0)
+        ? submissionData.attachments
+        : uploadedFiles
+    });
     this.cache.assignments.delete(String(courseId) + '_recent');
     this.cache.assignments.delete(String(courseId) + '_all');
     this.cache.assignments.delete(String(courseId));
     this.cache.groupedMaterials.delete(String(courseId));
     this.cache.allAssignments = null;
+    this.saveDiskCacheDebounced();
 
     return {
       success: true,
@@ -1239,12 +1470,19 @@ class CanvasService {
       }
     );
 
+    const submissionData = await res.json();
+    this.recordSubmittedOverride(courseId, assignmentId, {
+      ...(submissionData || {}),
+      body: body || submissionData?.body || null,
+      url: url || submissionData?.url || null
+    });
     this.cache.assignments.delete(String(courseId) + '_recent');
     this.cache.assignments.delete(String(courseId) + '_all');
     this.cache.assignments.delete(String(courseId));
     this.cache.groupedMaterials.delete(String(courseId));
     this.cache.allAssignments = null;
-    return await res.json();
+    this.saveDiskCacheDebounced();
+    return submissionData;
   }
 
   // 課題の最新の提出情報（添付ファイル・履歴・課題詳細含む）をCanvasからダイレクト取得
@@ -1279,31 +1517,41 @@ class CanvasService {
       }
 
       const assignObj = sub.assignment || null;
+      const override = this.cache.submittedOverrides?.get(`${courseId}_${assignmentId}`) || null;
+      const rawSubmitted = isSubmissionCompleted({ ...sub, attachments });
+      const isSubmitted = Boolean(rawSubmitted || (override && override.isSubmitted));
+      const isGraded = Boolean(isSubmissionGraded(sub) || (override && override.isGraded));
+
+      if (rawSubmitted) {
+        this.recordSubmittedOverride(courseId, assignmentId, { ...sub, attachments });
+      }
 
       return {
         id: sub.id,
         assignmentId: sub.assignment_id || assignmentId,
         userId: sub.user_id,
-        submittedAt: sub.submitted_at,
-        score: sub.score,
-        grade: sub.grade,
-        workflowState: sub.workflow_state,
-        attempt: sub.attempt,
-        body: sub.body,
-        url: sub.url,
+        submittedAt: sub.submitted_at || override?.submittedAt || null,
+        score: sub.score ?? override?.score ?? null,
+        grade: sub.grade ?? override?.grade ?? null,
+        workflowState: (rawSubmitted ? sub.workflow_state : (override?.workflowState || sub.workflow_state)) || (isSubmitted ? 'submitted' : 'unsubmitted'),
+        attempt: sub.attempt || override?.attempt || (isSubmitted ? 1 : null),
+        body: sub.body || override?.body || null,
+        url: sub.url || override?.url || null,
         submissionType: sub.submission_type,
         late: Boolean(sub.late),
         missing: Boolean(sub.missing),
-        isSubmitted: sub.workflow_state === 'submitted' || sub.workflow_state === 'graded',
-        isGraded: sub.workflow_state === 'graded',
+        isSubmitted,
+        isGraded,
         assignmentDescription: assignObj?.description || null,
         assignmentDueAt: assignObj?.due_at || null,
         assignmentPointsPossible: assignObj?.points_possible ?? null,
         assignmentSubmissionTypes: assignObj?.submission_types || null,
         assignmentHtmlUrl: assignObj?.html_url || null,
+        assignmentIsLocked: Boolean(assignObj?.locked_for_user),
         assignmentLockedForUser: Boolean(assignObj?.locked_for_user),
         assignmentLockExplanation: assignObj?.lock_explanation || assignObj?.lock_info?.lock_explanation || null,
         assignmentUnlockAt: assignObj?.unlock_at || assignObj?.lock_info?.unlock_at || null,
+        assignmentLockAt: assignObj?.lock_at || assignObj?.lock_info?.lock_at || null,
         attachments: (attachments || []).map(att => ({
           id: att.id,
           displayName: att.display_name || att.filename,

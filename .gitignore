@@ -4,7 +4,6 @@ node_modules/
 # Production Build Output (packaged apps)
 build/
 dist/
-src-tauri/target/
 *.zip
 *.exe
 *.blockmap
