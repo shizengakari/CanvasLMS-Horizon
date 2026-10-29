@@ -22,7 +22,7 @@ use tokio::io::AsyncWriteExt;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
-pub const APP_VERSION: &str = "1.4.1";
+pub const APP_VERSION: &str = "1.4.2";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DownloadJob {
