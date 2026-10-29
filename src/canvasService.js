@@ -840,13 +840,19 @@ class CanvasService {
         isLocked: isModuleLocked,
         items: (m.items || []).map(it => {
           const itemUnlockAt = it.unlock_at || it.lock_info?.unlock_at || it.content_details?.unlock_at || null;
+          const itemLockAt = it.lock_at || it.lock_info?.lock_at || it.content_details?.lock_at || null;
           const isItemLocked = Boolean(
+            it.locked ||
             it.locked_for_user ||
+            it.content_details?.locked ||
             it.content_details?.locked_for_user ||
+            it.lock_info ||
+            it.content_details?.lock_info ||
             it.workflow_state === 'unpublished' ||
             it.published === false ||
             isModuleLocked ||
-            (itemUnlockAt && new Date(itemUnlockAt) > new Date())
+            (itemUnlockAt && new Date(itemUnlockAt) > new Date()) ||
+            (itemLockAt && new Date(itemLockAt) <= new Date())
           );
           const isItemPublished = it.published !== false && it.workflow_state !== 'unpublished' && isModulePublished;
           const isItemCompleted = Boolean(it.completion_requirement && it.completion_requirement.completed);
@@ -904,8 +910,18 @@ class CanvasService {
             url: f.url || null,
             createdAt: f.created_at,
             updatedAt: f.updated_at,
-            isLocked: Boolean(f.locked_for_user || f.hidden_for_user),
-            lockedForUser: Boolean(f.locked_for_user),
+            isLocked: Boolean(
+              f.locked ||
+              f.locked_for_user ||
+              f.hidden ||
+              f.hidden_for_user ||
+              f.lock_info ||
+              (f.unlock_at && new Date(f.unlock_at) > new Date()) ||
+              (f.lock_info?.unlock_at && new Date(f.lock_info.unlock_at) > new Date()) ||
+              (f.lock_at && new Date(f.lock_at) <= new Date()) ||
+              (f.lock_info?.lock_at && new Date(f.lock_info.lock_at) <= new Date())
+            ),
+            lockedForUser: Boolean(f.locked_for_user || f.locked),
             unlockAt: f.unlock_at || f.lock_info?.unlock_at || null,
             lockExplanation: f.lock_explanation || f.lock_info?.lock_explanation || null,
             source: 'files'
@@ -1045,8 +1061,8 @@ class CanvasService {
             type: 'File',
             htmlUrl: it.htmlUrl,
             ...commonProps,
-            isLocked: Boolean(it.isLocked || resolved.isLocked || resolved.lockedForUser),
-            lockedForUser: Boolean(it.lockedForUser || resolved.lockedForUser),
+            isLocked: Boolean(it.isLocked || resolved.isLocked || it.lockedForUser || resolved.lockedForUser || m.isLocked),
+            lockedForUser: Boolean(it.lockedForUser || resolved.lockedForUser || it.isLocked || resolved.isLocked || m.isLocked),
             unlockAt: resolved.unlockAt || it.unlockAt || null,
             lockExplanation: resolved.lockExplanation || it.lockExplanation || null
           });

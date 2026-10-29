@@ -515,7 +515,34 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     assert.ok(mainJs.includes("status: 'downloading'"), 'src/main.js should include status: downloading');
     assert.ok(mainJs.includes("status: 'downloaded'"), 'src/main.js should include status: downloaded');
   });
+
+  it('should preserve colored item icons, use key icon and rename button to ロック for locked items', async () => {
+    const rootDir = path.join(__dirname, '..');
+    const appJs = fs.readFileSync(path.join(rootDir, 'public', 'js', 'app.js'), 'utf-8');
+    const styleCss = fs.readFileSync(path.join(rootDir, 'public', 'css', 'style.css'), 'utf-8');
+    const canvasServiceJs = fs.readFileSync(path.join(rootDir, 'src', 'canvasService.js'), 'utf-8');
+
+    // 1. ロック中アイテムであってもアイコンクラスが 'other' (モノクロ) に格下げされずカラーを維持すること
+    assert.ok(!appJs.includes("iconClass = isLockedItem ? 'other' : 'quiz'"), 'Quiz icon should not be downgraded to other when locked');
+    assert.ok(appJs.includes("iconClass = 'quiz';"), 'Quiz icon should remain quiz');
+    assert.ok(appJs.includes("iconClass = isAssignmentSubmitted ? 'assignment-submitted' : 'assignment';"), 'Assignment icon should remain colored even if locked');
+
+    // 2. ロックボタンに鍵のSVGアイコンと「ロック」の名称が適用されていること
+    const lockKeyPath = 'd="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"';
+    assert.ok(appJs.includes(lockKeyPath), 'app.js should contain standard key icon svg path');
+    assert.ok(appJs.includes('<span>ロック</span>'), 'app.js should display ロック instead of ロック中 in action buttons');
+    assert.ok(!appJs.includes('<span>ロック中</span>'), 'app.js should not contain any <span>ロック中</span>');
+
+    // 3. ファイルロック判定で !it.url && !it.id によるすり抜けが解消されていること
+    assert.ok(!appJs.includes('if (isLockedItem && !it.url && !it.id)'), 'File lock condition should not require empty url and id');
+    assert.ok(appJs.includes('if (isFile && isLockedItem)'), 'Clicking locked file should directly inform user instead of failing download');
+
+    // 4. モジュール全体のロック状態や公開日程 (unlockAt, lockAt) も反映されていること
+    assert.ok(appJs.includes('m.isLocked'), 'app.js should take parent module locked state into account');
+    assert.ok(canvasServiceJs.includes('m.isLocked'), 'canvasService should link module lock state to items');
+
+    // 5. style.css にてロックボタンのSVGアイコン色がアンバー/イエロー系に定義されていること
+    assert.ok(styleCss.includes('.action-chip-btn.action-locked svg'), 'style.css should style svg in action-locked');
+    assert.ok(styleCss.includes('.btn-submit-action.action-locked .btn-icon'), 'style.css should style .btn-icon in action-locked');
+  });
 });
-
-
-

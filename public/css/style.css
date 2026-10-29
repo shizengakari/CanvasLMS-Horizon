@@ -5255,12 +5255,21 @@ input:checked + .slider:before {
   color: #fbbf24;
   box-shadow: none;
 }
+.action-chip-btn.action-locked svg,
+.btn-submit-action.action-locked .btn-icon {
+  color: #fbbf24;
+}
 .action-chip-btn.action-locked:hover,
 .btn-submit-action.action-locked:hover {
   background: rgba(245, 158, 11, 0.18);
   border-color: rgba(245, 158, 11, 0.45);
   color: #fde68a;
   box-shadow: none;
+}
+.action-chip-btn.action-locked:hover svg,
+.btn-submit-action.action-locked:hover .btn-icon,
+.assignment-card:hover .btn-submit-action.action-locked .btn-icon {
+  color: #fde68a;
 }
 
 [data-theme="light"] .action-chip-btn.action-locked,
@@ -5270,12 +5279,21 @@ input:checked + .slider:before {
   color: #b45309;
   box-shadow: none;
 }
+[data-theme="light"] .action-chip-btn.action-locked svg,
+[data-theme="light"] .btn-submit-action.action-locked .btn-icon {
+  color: #b45309;
+}
 [data-theme="light"] .action-chip-btn.action-locked:hover,
 [data-theme="light"] .btn-submit-action.action-locked:hover {
   background: #fde68a;
   border-color: #f59e0b;
   color: #92400e;
   box-shadow: none;
+}
+[data-theme="light"] .action-chip-btn.action-locked:hover svg,
+[data-theme="light"] .btn-submit-action.action-locked:hover .btn-icon,
+[data-theme="light"] .assignment-card:hover .btn-submit-action.action-locked .btn-icon {
+  color: #92400e;
 }
 
 .file-preview-view {

@@ -2309,7 +2309,8 @@ function createAssignmentCardElement(a) {
        </button>`;
   } else if (isLocked) {
     actionBtnHtml = `<button class="btn-submit-action action-chip-btn action-locked" title="詳細を確認">
-        <span>ロック中</span>
+        <svg class="btn-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+        <span>ロック</span>
        </button>`;
   } else {
     actionBtnHtml = `<button class="btn-submit-action action-chip-btn action-submit" title="課題の提出画面を開く">
@@ -2473,7 +2474,7 @@ function updateAssignmentModalStatusBadge(assignment) {
     const subDate = assignment.submission?.submittedAt ? utils.formatDate(assignment.submission.submittedAt) : '提出済み';
     statusEl.innerHTML = `<span class="badge badge-submitted">提出済み (${subDate})</span>`;
   } else if (assignment.isLocked) {
-    statusEl.innerHTML = `<span class="badge badge-locked">ロック中</span>`;
+    statusEl.innerHTML = `<span class="badge badge-locked">ロック</span>`;
   } else {
     statusEl.innerHTML = `<span class="badge badge-pending">未提出</span>`;
   }
@@ -4015,7 +4016,7 @@ function renderGroupedMaterials(modules) {
     m.items.forEach(it => {
       const extUrl = it.externalUrl || it.url || it.htmlUrl;
       const ytId = utils.extractYouTubeVideoId(extUrl);
-      if (it.type === 'File' && !(it.isLocked && !it.url && !it.id)) {
+      if (it.type === 'File' && !(it.isLocked || it.lockedForUser || m.isLocked)) {
         fileItems.push({
           id: it.id,
           name: utils.normalizeFileName(it.displayName || it.filename || it.title, 'download'),
@@ -4106,7 +4107,14 @@ function renderGroupedMaterials(modules) {
       const fileCategory = isFile ? utils.classifyFile(title || it.url, it.contentType) : 'unknown';
       const isPdf = isFile && fileCategory === 'pdf';
       const isPreviewableFile = isFile && utils.isPreviewableCategory(fileCategory);
-      const isLockedItem = Boolean(it.isLocked || it.lockedForUser);
+      const isLockedItem = Boolean(
+        it.isLocked ||
+        it.lockedForUser ||
+        m.isLocked ||
+        (it.unlockAt && new Date(it.unlockAt).getTime() > Date.now()) ||
+        (it.lockAt && new Date(it.lockAt).getTime() <= Date.now()) ||
+        (m.unlockAt && new Date(m.unlockAt).getTime() > Date.now())
+      );
 
       const card = document.createElement('div');
       card.className = `module-file-card${isLockedItem ? ' is-locked-item' : ''}`;
@@ -4158,15 +4166,13 @@ function renderGroupedMaterials(modules) {
         iconClass = 'pdf';
         iconHtml = '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>';
       } else if (isQuiz) {
-        iconClass = isLockedItem ? 'other' : 'quiz';
+        iconClass = 'quiz';
         iconHtml = '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
       } else if (isPage || isDiscussion) {
         iconClass = 'page';
         iconHtml = '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>';
       } else if (isAssignment) {
-        iconClass = isAssignmentSubmitted
-          ? 'assignment-submitted'
-          : ((isLockedItem || matchingAssign?.isLocked) ? 'other' : 'assignment');
+        iconClass = isAssignmentSubmitted ? 'assignment-submitted' : 'assignment';
         iconHtml = '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>';
       } else if (ytId) {
         iconClass = 'video';
@@ -4220,10 +4226,11 @@ function renderGroupedMaterials(modules) {
       // アクションボタンの生成（シンプル＆クリーン）
       let actionHtml = '';
       if (isFile) {
-        if (isLockedItem && !it.url && !it.id) {
+        if (isLockedItem) {
           actionHtml = `
             <span class="action-chip-btn action-locked" title="詳細を確認">
-              <span>ロック中</span>
+              <svg class="btn-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+              <span>ロック</span>
             </span>
           `;
         } else {
@@ -4238,7 +4245,8 @@ function renderGroupedMaterials(modules) {
         if (isLockedItem) {
           actionHtml = `
             <span class="action-chip-btn action-locked" title="詳細を確認">
-              <span>ロック中</span>
+              <svg class="btn-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+              <span>ロック</span>
             </span>
           `;
         } else {
@@ -4253,7 +4261,8 @@ function renderGroupedMaterials(modules) {
         if (isLockedItem) {
           actionHtml = `
             <span class="action-chip-btn action-locked" title="詳細を確認">
-              <span>ロック中</span>
+              <svg class="btn-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+              <span>ロック</span>
             </span>
           `;
         } else {
@@ -4275,7 +4284,8 @@ function renderGroupedMaterials(modules) {
         } else if (isLockedItem || matchingAssign?.isLocked) {
           actionHtml = `
             <span class="action-chip-btn action-locked" title="詳細を確認">
-              <span>ロック中</span>
+              <svg class="btn-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+              <span>ロック</span>
             </span>
           `;
         } else {
@@ -4328,7 +4338,7 @@ function renderGroupedMaterials(modules) {
         if (fileDirectSaveBtn) {
           e.stopPropagation();
           e.preventDefault();
-          if (isLockedItem && !it.url && !it.id) {
+          if (isLockedItem) {
             showToast(it.lockExplanation || 'このファイルは現在ロックされているため保存できません', 'warning');
             return;
           }
@@ -4365,13 +4375,18 @@ function renderGroupedMaterials(modules) {
           return;
         }
 
+        if (isFile && isLockedItem) {
+          showToast(it.lockExplanation || 'このファイルは現在ロックされています', 'warning');
+          return;
+        }
+
         if (isPreviewableFile && (it.id || it.url)) {
           const previewUrl = it.id
             ? `/api/files/download?id=${it.id}&courseId=${it.courseId || state.materialsCourseId || ''}&inline=true&name=${encodeURIComponent(title)}`
             : `/api/files/download?url=${encodeURIComponent(it.url)}&courseId=${it.courseId || state.materialsCourseId || ''}&inline=true&name=${encodeURIComponent(title)}`;
           openPdfPreviewModal(previewUrl, title, it.id, it.courseId || state.materialsCourseId);
         } else if (isFile) {
-          if (isLockedItem && !it.url && !it.id) {
+          if (isLockedItem) {
             showToast(it.lockExplanation || 'このファイルは現在ロックされています', 'warning');
             return;
           }
@@ -4617,7 +4632,7 @@ document.getElementById('btn-download-all-zip').addEventListener('click', async 
     m.items.forEach(it => {
       const extUrl = it.externalUrl || it.url || it.htmlUrl;
       const ytId = utils.extractYouTubeVideoId(extUrl);
-      if (it.type === 'File' && it.id && !(it.isLocked && !it.url)) {
+      if (it.type === 'File' && it.id && !(it.isLocked || it.lockedForUser || m.isLocked)) {
         allFiles.push({
           id: it.id,
           name: utils.normalizeFileName(it.displayName || it.filename || it.title, 'download'),
