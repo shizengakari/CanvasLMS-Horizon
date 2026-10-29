@@ -2,27 +2,6 @@
 
 Canvas LMS のデスクトップクライアントです。各種タスクの提出管理、教材や添付ファイルの閲覧・ダウンロード、関連動画コンテンツの視聴などをデスクトップ上で行えます。
 
-## 開発環境とビルド
-
-Node.js 18 以上が必要です。
-
-```bash
-# リポジトリのクローン
-git clone https://github.com/shizengakari/CanvasLMS-Horizon.git
-cd CanvasLMS-Horizon
-
-# 依存関係のインストール
-npm install
-
-# 開発モード起動
-npm run dev
-
-# Windows 向けビルド
-npm run build
-```
-
-ビルド成果物は `build/Canvas Horizon-win32-x64/` に出力されます。
-
 ## 設定
 
 アプリ起動後、設定画面で以下を入力します。
