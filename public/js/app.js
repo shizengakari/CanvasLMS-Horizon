@@ -87,19 +87,29 @@ if (typeof window !== 'undefined' && !window.desktopAPI) {
       try {
         return await invokeTauri('check_for_updates');
       } catch (_) {
-        const r = await fetch('/api/app/check-update');
-        return r.json();
+        window.__dispatchUpdateStatus({ status: 'checking' });
+        const r = await fetch('/api/desktop/check-update');
+        const d = await r.json();
+        if (d && d.status) window.__dispatchUpdateStatus(d);
+        return d;
       }
     },
     startDownloadUpdate: async () => {
       try {
         return await invokeTauri('start_download_update');
       } catch (_) {
-        return { success: false };
+        window.__dispatchUpdateStatus({ status: 'downloading', percent: 15 });
+        const r = await fetch('/api/desktop/download-update', { method: 'POST' });
+        const d = await r.json();
+        if (d && d.status) window.__dispatchUpdateStatus(d);
+        else if (d && d.error) window.__dispatchUpdateStatus({ status: 'error', error: d.error });
+        return d;
       }
     },
     quitAndInstall: () => {
-      invokeTauri('quit_and_install').catch(() => {});
+      invokeTauri('quit_and_install').catch(() => {
+        fetch('/api/desktop/quit-and-install', { method: 'POST' }).catch(() => {});
+      });
     },
     onUpdateStatus: (cb) => {
       if (typeof cb === 'function') updateListeners.push(cb);

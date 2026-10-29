@@ -475,16 +475,25 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     }
   });
 
-  it('should keep repository clean and minimal without docs/ folder while preserving built-in app.asar updater support', () => {
+  it('should keep repository clean without docs/ folder and verify Rust native backend + built-in updater', () => {
     const rootDir = path.join(__dirname, '..');
     assert.strictEqual(fs.existsSync(path.join(rootDir, 'docs')), false, 'docs folder should be removed');
-    assert.strictEqual(fs.existsSync(path.join(rootDir, 'src-tauri')), false, 'unused src-tauri folder should be removed');
     assert.strictEqual(fs.existsSync(path.join(rootDir, 'src-rust')), false, 'unused src-rust folder should be removed');
+    assert.strictEqual(fs.existsSync(path.join(rootDir, 'src-tauri', 'src', 'lib.rs')), true, 'Rust lib.rs should exist');
+    assert.strictEqual(fs.existsSync(path.join(rootDir, 'src-tauri', 'src', 'server.rs')), true, 'Rust server.rs should exist');
+    assert.strictEqual(fs.existsSync(path.join(rootDir, 'src-tauri', 'src', 'canvas.rs')), true, 'Rust canvas.rs should exist');
+
+    const rustLib = fs.readFileSync(path.join(rootDir, 'src-tauri', 'src', 'lib.rs'), 'utf-8');
+    assert.ok(rustLib.includes('check_for_updates'), 'Rust lib.rs should implement check_for_updates');
+    assert.ok(rustLib.includes('start_download_update'), 'Rust lib.rs should implement start_download_update');
+    assert.ok(rustLib.includes('quit_and_install'), 'Rust lib.rs should implement quit_and_install');
+    assert.ok(rustLib.includes('Unblock-File'), 'Rust updater should run Unblock-File to grant execution permission');
 
     const mainJs = fs.readFileSync(path.join(rootDir, 'src', 'main.js'), 'utf-8');
     assert.ok(mainJs.includes('checkAsarUpdate'), 'src/main.js should include checkAsarUpdate for built-in hot updates');
     assert.ok(mainJs.includes('start-download-update'), 'src/main.js should handle start-download-update');
     assert.ok(mainJs.includes('quit-and-install'), 'src/main.js should handle quit-and-install');
+    assert.ok(mainJs.includes('Unblock-File'), 'src/main.js should run Unblock-File when migrating to Rust exe');
   });
 });
 

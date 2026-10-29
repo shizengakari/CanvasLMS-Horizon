@@ -307,9 +307,9 @@ if (!gotTheLock) {
   }));
 
   // ==========================================
-  // 自動アップデート用 (SmartScreen/Defender完全回避 Asar ホットパッチ更新)
+  // 自動アップデート用 (Rust ネイティブ exe 移行 & Asar ホットパッチ更新)
   // ==========================================
-  let pendingAsarUpdate = null; // { version, pendingFile, targetAsar, exePath }
+  let pendingAsarUpdate = null; // { version, pendingFile, targetPath, exePath, isRustExe }
 
   async function checkAsarUpdate() {
     if (!app.isPackaged) {
@@ -335,17 +335,22 @@ if (!gotTheLock) {
       }
       const release = await resp.json();
       const latestTag = release.tag_name || '';
-      const hasUpdate = compareSemver(latestTag, currentVersion) > 0;
+      const hasNewerVersion = compareSemver(latestTag, currentVersion) > 0;
+      const rustExeAsset = release.assets?.find(a => a.name && a.name.toLowerCase() === 'canvas-horizon.exe');
       const asarAsset = release.assets?.find(a => a.name === 'app.asar');
+      // Electron 実行中かつ同バージョンのリリースに Rust ネイティブ版 (canvas-horizon.exe) が存在する場合は移行アップデートを提供
+      const canMigrateToRust = Boolean(rustExeAsset && compareSemver(latestTag, currentVersion) >= 0);
+      const targetAsset = rustExeAsset || asarAsset;
 
-      if (hasUpdate && asarAsset) {
+      if ((hasNewerVersion || canMigrateToRust) && targetAsset) {
         const updateData = {
           type: 'available',
           version: latestTag,
           releaseNotes: release.body || '',
           releaseDate: release.published_at,
-          downloadUrl: asarAsset.browser_download_url,
-          size: asarAsset.size
+          downloadUrl: targetAsset.browser_download_url,
+          size: targetAsset.size,
+          isRustMigration: Boolean(rustExeAsset)
         };
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('update-status', updateData);
@@ -391,16 +396,17 @@ if (!gotTheLock) {
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const release = await resp.json();
+      const rustExeAsset = release.assets?.find(a => a.name && a.name.toLowerCase() === 'canvas-horizon.exe');
       const asarAsset = release.assets?.find(a => a.name === 'app.asar');
-      if (!asarAsset) throw new Error('app.asar が最新リリースに見つかりません');
+      const targetAsset = rustExeAsset || asarAsset;
+      if (!targetAsset) throw new Error('更新ファイル (canvas-horizon.exe / app.asar) が最新リリースに見つかりません');
 
-      const downloadUrl = asarAsset.browser_download_url;
-      const totalBytes = asarAsset.size || 0;
+      const isRustExe = Boolean(rustExeAsset);
+      const downloadUrl = targetAsset.browser_download_url;
+      const totalBytes = targetAsset.size || 0;
       const updateDir = path.join(app.getPath('userData'), 'pending-update');
       if (!fs.existsSync(updateDir)) fs.mkdirSync(updateDir, { recursive: true });
-      // Electron の asar hook による Invalid package 例外を完全に回避するため拡張子は .bin とする
-      const pendingFile = path.join(updateDir, 'app.update.bin');
-      // 再ダウンロードが失敗した場合に、上書き途中のファイルを適用しないよう解除しておく
+      const pendingFile = path.join(updateDir, isRustExe ? 'canvas-horizon.update.exe' : 'app.update.bin');
       pendingAsarUpdate = null;
 
       const downloadResp = await fetch(downloadUrl);
@@ -415,7 +421,6 @@ if (!gotTheLock) {
         const { done, value } = await reader.read();
         if (done) break;
         receivedBytes += value.length;
-        // 書き込みバッファが満杯なら drain を待ってから次のチャンクを読み込む
         if (!fileStream.write(Buffer.from(value))) {
           await once(fileStream, 'drain');
         }
@@ -441,17 +446,30 @@ if (!gotTheLock) {
         fileStream.end();
       });
 
-      // 不完全なファイルで app.asar を上書きしないようサイズを検証する
       if (totalBytes > 0 && receivedBytes !== totalBytes) {
         try { ofs.unlinkSync(pendingFile); } catch (_) {}
         throw new Error(`ダウンロードが不完全です (${receivedBytes} / ${totalBytes} bytes)`);
       }
 
+      if (isRustExe && process.platform === 'win32') {
+        try {
+          spawn('powershell.exe', [
+            '-NoProfile',
+            '-NonInteractive',
+            '-WindowStyle',
+            'Hidden',
+            '-Command',
+            `Unblock-File -LiteralPath '${pendingFile.replace(/'/g, "''")}' -ErrorAction SilentlyContinue`
+          ], { windowsHide: true, stdio: 'ignore' });
+        } catch (_) {}
+      }
+
       pendingAsarUpdate = {
         version: release.tag_name,
         pendingFile,
-        targetAsar: path.join(process.resourcesPath, 'app.asar'),
-        exePath: process.execPath
+        targetAsar: isRustExe ? process.execPath : path.join(process.resourcesPath, 'app.asar'),
+        exePath: process.execPath,
+        isRustExe
       };
 
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -487,26 +505,31 @@ if (!gotTheLock) {
     }
 
     if (pendingAsarUpdate && fs.existsSync(pendingAsarUpdate.pendingFile)) {
-      // Windows用ホットパッチ再起動バッチスクリプト
-      // stdin がリダイレクトされていると timeout は即終了するため、待機には ping を使う
-      // コピーは最大10回まで再試行し、失敗した場合は現在のバージョンのまま再起動する
       const updateDir = path.dirname(pendingAsarUpdate.pendingFile);
       const batPath = path.join(updateDir, 'apply-update.bat');
-      const batContent = `@echo off
-chcp 65001 >nul
-ping -n 2 127.0.0.1 >nul
-set /a retries=0
-:retry
-copy /y "${pendingAsarUpdate.pendingFile}" "${pendingAsarUpdate.targetAsar}" >nul 2>&1
-if not errorlevel 1 goto launch
-set /a retries+=1
-if %retries% geq 10 goto launch
-ping -n 2 127.0.0.1 >nul
-goto retry
-:launch
-start "" "${pendingAsarUpdate.exePath}"
-del "${pendingAsarUpdate.pendingFile}" >nul 2>&1
-(goto) 2>nul & del "%~f0"
+      const escapedPending = pendingAsarUpdate.pendingFile.replace(/'/g, "''");
+      const escapedTarget = pendingAsarUpdate.targetAsar.replace(/'/g, "''");
+      const unblockCmd = pendingAsarUpdate.isRustExe
+        ? `powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "Unblock-File -LiteralPath '${escapedPending}' -ErrorAction SilentlyContinue"\r\n`
+        : '';
+      const unblockTargetCmd = pendingAsarUpdate.isRustExe
+        ? `powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "Unblock-File -LiteralPath '${escapedTarget}' -ErrorAction SilentlyContinue"\r\n`
+        : '';
+      const batContent = `@echo off\r
+chcp 65001 >nul\r
+ping -n 2 127.0.0.1 >nul\r
+${unblockCmd}set /a retries=0\r
+:retry\r
+copy /y "${pendingAsarUpdate.pendingFile}" "${pendingAsarUpdate.targetAsar}" >nul 2>&1\r
+if not errorlevel 1 goto launch\r
+set /a retries+=1\r
+if %retries% geq 10 goto launch\r
+ping -n 2 127.0.0.1 >nul\r
+goto retry\r
+:launch\r
+${unblockTargetCmd}start "" "${pendingAsarUpdate.exePath}"\r
+del "${pendingAsarUpdate.pendingFile}" >nul 2>&1\r
+(goto) 2>nul & del "%~f0"\r
 `;
       try {
         fs.writeFileSync(batPath, batContent, 'utf8');

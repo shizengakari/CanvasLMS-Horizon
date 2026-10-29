@@ -26,6 +26,14 @@ jobs:
           node-version: 20
           cache: 'npm'
 
+      - name: Rust ツールチェーンのセットアップ
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust ビルドキャッシュ
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
       - name: 依存関係のインストール
         run: npm ci
 
@@ -35,11 +43,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Rust ネイティブバイナリ (canvas-horizon.exe) のビルド
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml
+
       - name: Windows アプリのビルド
         run: npx electron-builder --win --publish never
 
-      - name: ポータブルZIPの作成
-        run: powershell -NoProfile -Command "Compress-Archive -Path 'dist\win-unpacked\*' -DestinationPath 'dist\Canvas-Horizon-Windows-x64-Portable.zip' -Force"
+      - name: Rust ネイティブ実行ファイルの配置とポータブルZIPの作成
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item -Path "src-tauri\target\release\canvas-horizon.exe" -Destination "dist\canvas-horizon.exe" -Force
+          Compress-Archive -Path "dist\win-unpacked\*" -DestinationPath "dist\Canvas-Horizon-Windows-x64-Portable.zip" -Force
 
       - name: GitHub Releases へ一括完全公開
         uses: softprops/action-gh-release@v2
@@ -47,6 +61,7 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           name: ${{ env.RELEASE_TAG }}
           files: |
+            dist/canvas-horizon.exe
             dist/Canvas-Horizon-Setup-*.exe
             dist/Canvas-Horizon-Setup-*.exe.blockmap
             dist/Canvas-Horizon-Windows-x64-Portable.zip

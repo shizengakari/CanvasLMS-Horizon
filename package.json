@@ -1,6 +1,6 @@
 {
   "name": "canvas-horizon",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Canvas LMS デスクトップクライアント",
   "main": "src/main.js",
   "repository": {
@@ -28,6 +28,7 @@
       "!dist/**",
       "!test/**",
       "!scripts/**",
+      "!src-tauri/**",
       "!*.zip",
       "!Canvas-Horizon-Windows-x64.zip"
     ],
