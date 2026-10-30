@@ -1559,8 +1559,30 @@ a:hover {
 }
 
 #material-course-select {
-  min-width: 260px;
-  max-width: 380px;
+  display: none;
+}
+
+.materials-course-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 360px;
+  padding: 4px 2px;
+}
+
+.materials-course-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.01em;
+}
+
+[data-theme="light"] .materials-course-name {
+  color: #1a1f36;
 }
 
 #dashboard-sort-select {
@@ -2267,12 +2289,10 @@ a:hover {
   justify-content: center;
   flex-shrink: 0;
   box-shadow: none;
-  transition: transform var(--transition-fast), border-color var(--transition-fast);
+  transition: border-color var(--transition-fast);
 }
 
-.module-file-card:hover .module-file-icon {
-  transform: scale(1.05);
-}
+/* ホバー時の拡大による縁の崩れ・歪みを防ぎ、描画負荷を低減するためホバー拡大効果は排除 */
 
 /* 1. 文書・PDFファイル */
 .module-file-icon.pdf {

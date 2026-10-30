@@ -1264,6 +1264,7 @@ function switchView(viewName) {
       const matSelect = document.getElementById('material-course-select');
       if (matSelect) matSelect.value = state.materialsCourseId;
     }
+    updateMaterialsCourseHeader(state.materialsCourseId);
     if (state.materialsCourseId && (!state.groupedMaterials || state.groupedMaterials.length === 0)) {
       loadCourseMaterialsGrouped(state.materialsCourseId);
     }
@@ -1909,13 +1910,34 @@ function renderSidebarCourses(courses) {
       ${pendingCount > 0 ? `<span class="course-task-badge" title="未提出課題: ${pendingCount}件">${pendingCount}</span>` : ''}
     `;
 
+    let hoverPrefetchTimer = null;
+    item.addEventListener('mouseenter', () => {
+      const isSaving = document.body.classList.contains('battery-saver');
+      if (isSaving) return;
+      if (getCachedMaterials(c.id)) return;
+      hoverPrefetchTimer = setTimeout(() => {
+        prefetchCourseMaterials(c.id);
+      }, 250);
+    });
+    item.addEventListener('mouseleave', () => {
+      if (hoverPrefetchTimer) {
+        clearTimeout(hoverPrefetchTimer);
+        hoverPrefetchTimer = null;
+      }
+    });
+
     item.addEventListener('click', () => {
+      if (hoverPrefetchTimer) {
+        clearTimeout(hoverPrefetchTimer);
+        hoverPrefetchTimer = null;
+      }
       document.querySelectorAll('.sidebar-course-item').forEach(el => el.classList.remove('active'));
       item.classList.add('active');
 
       state.materialsCourseId = c.id;
       const select = document.getElementById('material-course-select');
       if (select) select.value = c.id;
+      updateMaterialsCourseHeader(c.id);
       switchView('materials');
       loadCourseMaterialsGrouped(c.id, false);
     });
@@ -1929,20 +1951,39 @@ function setupSidebarQuarterFilters() {
   // サイドバーピルは廃止（設定画面で管理）
 }
 
+function updateMaterialsCourseHeader(courseId = state.materialsCourseId) {
+  const titleEl = document.getElementById('material-course-name-title');
+  if (!titleEl) return;
+  const course = (state.courses || []).find(c => String(c.id) === String(courseId));
+  const name = course ? (course.cleanName || course.name) : '講義資料';
+  titleEl.textContent = name;
+  titleEl.title = name;
+}
+
+function getSelectedCourseName(courseId = state.materialsCourseId) {
+  const course = (state.courses || []).find(c => String(c.id) === String(courseId));
+  if (course) return course.cleanName || course.name;
+  const matSelect = document.getElementById('material-course-select');
+  return matSelect?.selectedOptions[0]?.text || '';
+}
+
 function populateMaterialCourseSelect(courses) {
   const matSelect = document.getElementById('material-course-select');
-  matSelect.innerHTML = '';
+  if (matSelect) {
+    matSelect.innerHTML = '';
+    courses.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = c.cleanName || c.name;
+      matSelect.appendChild(opt);
+    });
 
-  courses.forEach(c => {
-    const opt = document.createElement('option');
-    opt.value = c.id;
-    opt.textContent = c.cleanName || c.name;
-    matSelect.appendChild(opt);
-  });
-
-  if (state.materialsCourseId) {
-    matSelect.value = state.materialsCourseId;
+    if (state.materialsCourseId) {
+      matSelect.value = state.materialsCourseId;
+    }
   }
+
+  updateMaterialsCourseHeader();
 }
 
 // 全課題タイムラインの読み込み
@@ -3731,10 +3772,14 @@ async function executeUrlSubmission() {
 }
 
 // 授業回（モジュール）ごとの資料表示
-document.getElementById('material-course-select').addEventListener('change', (e) => {
-  state.materialsCourseId = e.target.value;
-  loadCourseMaterialsGrouped(e.target.value);
-});
+const matCourseSelectEl = document.getElementById('material-course-select');
+if (matCourseSelectEl) {
+  matCourseSelectEl.addEventListener('change', (e) => {
+    state.materialsCourseId = e.target.value;
+    updateMaterialsCourseHeader(e.target.value);
+    loadCourseMaterialsGrouped(e.target.value);
+  });
+}
 
 // 講義資料画面の初期化イベント（リアルタイム検索 & すべて折りたたむ）
 let areAllModulesCollapsed = false;
@@ -3801,20 +3846,24 @@ function filterMaterialsInDom(query) {
 }
 
 // クライアント側講義資料キャッシュ管理 (バッテリー節約 & 即時ゼロディレイ表示)
-const CLIENT_MATERIALS_CACHE_TTL = 30 * 60 * 1000; // 30分間有効
-const MAX_MATERIALS_IN_MEMORY = 12; // メモリ肥大化を防ぐ上限件数
+const CLIENT_MATERIALS_CACHE_TTL = 60 * 60 * 1000; // 60分間有効
+const CLIENT_MATERIALS_FRESH_TTL = 15 * 60 * 1000; // 15分間は完全最新（追加検証不要でバッテリー保護）
+const MAX_MATERIALS_IN_MEMORY = 16; // メモリ肥大化を防ぐ上限件数
 
-function getCachedMaterials(courseId) {
+function getCachedMaterialsEntry(courseId) {
+  if (!courseId) return null;
   const cacheKey = String(courseId);
+
   // 1. インメモリキャッシュ
   if (state.materialsCache.has(cacheKey)) {
     const entry = state.materialsCache.get(cacheKey);
     const data = (entry && entry.data) ? entry.data : entry;
     const time = (entry && entry.timestamp) ? entry.timestamp : 0;
     if (data && (Date.now() - time < CLIENT_MATERIALS_CACHE_TTL)) {
-      return data;
+      return { data, timestamp: time };
     }
   }
+
   // 2. セッションストレージ (タブ/ウィンドウを開いている間の高速復旧)
   try {
     const raw = sessionStorage.getItem(`canvas_horizon_materials_${cacheKey}`);
@@ -3822,14 +3871,33 @@ function getCachedMaterials(courseId) {
       const parsed = JSON.parse(raw);
       if (parsed && parsed.data && (Date.now() - (parsed.timestamp || 0) < CLIENT_MATERIALS_CACHE_TTL)) {
         state.materialsCache.set(cacheKey, parsed);
-        return parsed.data;
+        return { data: parsed.data, timestamp: parsed.timestamp || 0 };
       }
     }
   } catch (_) {}
+
+  // 3. ローカルストレージ (アプリ再起動後も即座に0msで描画可能)
+  try {
+    const raw = localStorage.getItem(`canvas_horizon_materials_${cacheKey}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.data && (Date.now() - (parsed.timestamp || 0) < CLIENT_MATERIALS_CACHE_TTL)) {
+        state.materialsCache.set(cacheKey, parsed);
+        return { data: parsed.data, timestamp: parsed.timestamp || 0 };
+      }
+    }
+  } catch (_) {}
+
   return null;
 }
 
+function getCachedMaterials(courseId) {
+  const entry = getCachedMaterialsEntry(courseId);
+  return entry ? entry.data : null;
+}
+
 function setCachedMaterials(courseId, modules) {
+  if (!courseId || !Array.isArray(modules)) return;
   const cacheKey = String(courseId);
   const entry = { data: modules, timestamp: Date.now() };
 
@@ -3843,8 +3911,10 @@ function setCachedMaterials(courseId, modules) {
   }
   state.materialsCache.set(cacheKey, entry);
 
+  const serialized = JSON.stringify(entry);
+
   try {
-    sessionStorage.setItem(`canvas_horizon_materials_${cacheKey}`, JSON.stringify(entry));
+    sessionStorage.setItem(`canvas_horizon_materials_${cacheKey}`, serialized);
   } catch (err) {
     // QuotaExceededError が発生した場合は古い講義資料セッションストレージキーをパージ
     try {
@@ -3854,18 +3924,38 @@ function setCachedMaterials(courseId, modules) {
           sessionStorage.removeItem(k);
         }
       }
-      sessionStorage.setItem(`canvas_horizon_materials_${cacheKey}`, JSON.stringify(entry));
+      sessionStorage.setItem(`canvas_horizon_materials_${cacheKey}`, serialized);
+    } catch (_) {}
+  }
+
+  try {
+    localStorage.setItem(`canvas_horizon_materials_${cacheKey}`, serialized);
+  } catch (err) {
+    // QuotaExceededError 発生時は古い科目キャッシュを自動パージ
+    try {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('canvas_horizon_materials_')) {
+          keys.push(k);
+        }
+      }
+      keys.forEach(k => localStorage.removeItem(k));
+      localStorage.setItem(`canvas_horizon_materials_${cacheKey}`, serialized);
     } catch (_) {}
   }
 }
 
-// 特定コースの講義資料クライアントキャッシュ（メモリ＋sessionStorage）を即時破棄
+// 特定コースの講義資料クライアントキャッシュ（メモリ＋sessionStorage＋localStorage）を即時破棄
 function invalidateCourseMaterialsCache(courseId) {
   if (!courseId) return;
   const cacheKey = String(courseId);
   state.materialsCache.delete(cacheKey);
   try {
     sessionStorage.removeItem(`canvas_horizon_materials_${cacheKey}`);
+  } catch (_) {}
+  try {
+    localStorage.removeItem(`canvas_horizon_materials_${cacheKey}`);
   } catch (_) {}
 }
 
@@ -3937,23 +4027,87 @@ function syncAssignmentSubmissionState(courseId, assignmentId, submissionObj = {
   }
 }
 
+// 重複フェッチおよび同時通信を防ぐ Promise プール（バッテリー節約）
+const inFlightMaterialsRequests = new Map();
+
+async function fetchMaterialsApi(courseId, forceRefresh = false) {
+  const reqKey = `${courseId}_${forceRefresh}`;
+  if (inFlightMaterialsRequests.has(reqKey)) {
+    return inFlightMaterialsRequests.get(reqKey);
+  }
+
+  const p = (async () => {
+    try {
+      return await api.get(`/api/courses/${courseId}/materials-grouped?refresh=${forceRefresh}`);
+    } finally {
+      inFlightMaterialsRequests.delete(reqKey);
+    }
+  })();
+
+  inFlightMaterialsRequests.set(reqKey, p);
+  return p;
+}
+
+// 科目ホバー時の事前先読み（スマートバックグラウンドフェッチ・バッテリーセーバー時はスキップ）
+async function prefetchCourseMaterials(courseId) {
+  if (!courseId) return;
+  const isSaving = document.body.classList.contains('battery-saver');
+  if (isSaving) return; // 省電力モード時は先読みを控える
+
+  const targetId = String(courseId);
+  if (getCachedMaterials(targetId)) return; // 既にキャッシュがあれば何もしない
+
+  try {
+    const res = await fetchMaterialsApi(targetId, false);
+    if (res && res.success && res.modules) {
+      setCachedMaterials(targetId, res.modules);
+    }
+  } catch (_) {}
+}
+
 async function loadCourseMaterialsGrouped(courseId, forceRefresh = false) {
   if (!courseId) return;
   const container = document.getElementById('grouped-modules-container');
   const targetId = String(courseId);
   state.materialsCourseId = targetId;
+  updateMaterialsCourseHeader(targetId);
 
-  // 1. キャッシュが存在する場合: 0msで即座にパッと描画！(バッテリー消費・通信ゼロ)
-  if (!forceRefresh) {
-    const cached = getCachedMaterials(targetId);
-    if (cached) {
-      state.groupedMaterials = cached;
-      renderGroupedMaterials(cached);
+  const cachedEntry = getCachedMaterialsEntry(targetId);
+  const isBatterySaving = document.body.classList.contains('battery-saver');
+  const now = Date.now();
+
+  // 1. キャッシュが存在する場合: 0msで即座にパッと描画！（長時間のスピナー待機ゼロ）
+  if (cachedEntry && cachedEntry.data) {
+    state.groupedMaterials = cachedEntry.data;
+    renderGroupedMaterials(cachedEntry.data);
+
+    // キャッシュが新鮮 (15分以内) または省電力モード時はバックグラウンド通信を行わない（バッテリー最優先保護）
+    const isFresh = (now - cachedEntry.timestamp < CLIENT_MATERIALS_FRESH_TTL);
+    if (!forceRefresh && (isFresh || isBatterySaving)) {
       return;
     }
+
+    // 古いキャッシュの検証または強制更新時は、画面を消さずにバックグラウンドで最新データを取得（SWR）
+    try {
+      const res = await fetchMaterialsApi(targetId, forceRefresh);
+      if (String(state.materialsCourseId) !== targetId) return;
+
+      if (res && res.success && res.modules) {
+        // データに実際の変更があった場合のみ再描画（不要なDOM再構築によるCPU消費を防ぐ）
+        const isSame = JSON.stringify(cachedEntry.data) === JSON.stringify(res.modules);
+        setCachedMaterials(targetId, res.modules);
+        if (!isSame) {
+          state.groupedMaterials = res.modules;
+          renderGroupedMaterials(res.modules);
+        }
+      }
+    } catch (_) {
+      // SWR検証に失敗しても既存のキャッシュ画面をそのまま保つ
+    }
+    return;
   }
 
-  // 2. キャッシュがない場合: 画面中央にシンプルな同期スピナーを表示
+  // 2. キャッシュが全くない初アクセス時のみスピナーを表示
   container.innerHTML = `
     <div class="materials-center-loading">
       <div class="spinner-ring"></div>
@@ -3962,11 +4116,11 @@ async function loadCourseMaterialsGrouped(courseId, forceRefresh = false) {
   `;
 
   try {
-    const res = await api.get(`/api/courses/${courseId}/materials-grouped?refresh=${forceRefresh}`);
+    const res = await fetchMaterialsApi(targetId, forceRefresh);
     // 通信中にユーザーが別科目に切り替えていた場合は古い結果を適用しない
     if (String(state.materialsCourseId) !== targetId) return;
 
-    if (res.success && res.modules) {
+    if (res && res.success && res.modules) {
       state.groupedMaterials = res.modules;
       setCachedMaterials(targetId, res.modules);
       renderGroupedMaterials(res.modules);
@@ -4416,7 +4570,7 @@ function renderGroupedMaterials(modules) {
               id: it.contentId || it.id,
               courseId: state.materialsCourseId,
               name: title,
-              courseName: document.getElementById('material-course-select')?.selectedOptions[0]?.text || '',
+              courseName: getSelectedCourseName(),
               submissionTypes: ['online_quiz'],
               htmlUrl: quizUrl,
               lockExplanation: it.lockExplanation || null
@@ -4439,7 +4593,7 @@ function renderGroupedMaterials(modules) {
             id: it.assignmentId || it.contentId || it.id,
             courseId: it.courseId || state.materialsCourseId,
             name: title,
-            courseName: document.getElementById('material-course-select')?.selectedOptions[0]?.text || '',
+            courseName: getSelectedCourseName(),
             submissionTypes: it.submissionTypes || ['online_upload'],
             isSubmitted: isAssignmentSubmitted,
             isLocked: Boolean(it.isLocked || it.lockedForUser),
@@ -4657,8 +4811,7 @@ document.getElementById('btn-download-all-zip').addEventListener('click', async 
 
   if (allFiles.length === 0 && allVideos.length === 0) return;
 
-  const courseSelect = document.getElementById('material-course-select');
-  const courseName = courseSelect.options[courseSelect.selectedIndex]?.text || '講義資料';
+  const courseName = getSelectedCourseName() || '講義資料';
 
   const origHtml = btn.innerHTML;
   btn.disabled = true;
@@ -6059,7 +6212,7 @@ function setupCommandPalette() {
 
     // 1. 講義資料（PDF・スライド・配布ファイル・講義ノート・YouTube動画）
     if (Array.isArray(state.groupedMaterials)) {
-      const activeCourseName = document.getElementById('material-course-select')?.selectedOptions[0]?.text || '';
+      const activeCourseName = getSelectedCourseName();
       state.groupedMaterials.forEach(m => {
         (m.items || []).forEach(it => {
           const title = it.displayName || it.title || '';
@@ -6160,6 +6313,7 @@ function setupCommandPalette() {
             state.materialsCourseId = c.id;
             const matSelect = document.getElementById('material-course-select');
             if (matSelect) matSelect.value = c.id;
+            updateMaterialsCourseHeader(c.id);
             switchView('materials');
             loadCourseMaterialsGrouped(c.id, false);
           }

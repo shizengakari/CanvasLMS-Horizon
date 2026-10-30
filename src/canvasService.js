@@ -290,6 +290,9 @@ class CanvasService {
 
   // 全キャッシュのクリア（メモリ・ディスク両方）
   clearAllCache(keepProfile = true) {
+    if (this.pendingMaterialsPromises) {
+      this.pendingMaterialsPromises.clear();
+    }
     const profile = keepProfile ? this.cache.profile : null;
     const submittedOverrides = keepProfile && this.cache.submittedOverrides
       ? new Map(this.cache.submittedOverrides)
@@ -932,71 +935,33 @@ class CanvasService {
       // 403 の場合はモジュールからファイルを集約
     }
 
-    // 2. モジュールから 'File' タイプのアイテムを取得・解決
+    // 2. モジュールから 'File' タイプのアイテムを取得・高速マッピング
+    // （大量の直列/バッチHTTPリクエストを完全排除し、瞬時の科目表示とバッテリー節約を実現）
     const modules = await this.getModules(courseId, forceRefresh);
-    const fileItems = [];
     modules.forEach(m => {
       (m.items || []).forEach(it => {
         if (it.type === 'File' && it.contentId && !fileMap.has(String(it.contentId))) {
-          fileItems.push({
-            contentId: it.contentId,
-            title: it.title,
-            url: it.url,
+          const title = it.title || 'ファイル';
+          const isPdf = title.toLowerCase().endsWith('.pdf');
+          fileMap.set(String(it.contentId), {
+            id: it.contentId,
+            displayName: title,
+            filename: title,
+            size: 0,
+            contentType: isPdf ? 'application/pdf' : 'application/octet-stream',
+            url: it.url || null,
+            createdAt: null,
+            updatedAt: null,
+            isLocked: Boolean(it.isLocked || m.isLocked),
+            lockedForUser: Boolean(it.lockedForUser || it.isLocked || m.isLocked),
+            unlockAt: it.unlockAt || null,
+            lockExplanation: it.lockExplanation || null,
             moduleName: m.name,
-            isLocked: it.isLocked,
-            lockedForUser: it.lockedForUser,
-            unlockAt: it.unlockAt,
-            lockExplanation: it.lockExplanation
+            source: 'module'
           });
         }
       });
     });
-
-    // モジュール内ファイルを並列解決（最大10件ずつバッチ処理）
-    const batchSize = 10;
-    for (let i = 0; i < fileItems.length; i += batchSize) {
-      const batch = fileItems.slice(i, i + batchSize);
-      await Promise.all(batch.map(async item => {
-        try {
-          if (item.url) {
-            const fData = await this.fetchJson(item.url);
-            const resolvedName = fData.display_name || fData.filename || item.title;
-            fileMap.set(String(item.contentId), {
-              id: item.contentId,
-              displayName: resolvedName,
-              filename: fData.filename || resolvedName,
-              size: fData.size || 0,
-              contentType: fData['content-type'] || fData.content_type || (resolvedName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream'),
-              url: fData.url || null,
-              createdAt: fData.created_at || null,
-              updatedAt: fData.updated_at || null,
-              isLocked: Boolean(fData.locked_for_user || fData.hidden_for_user || item.isLocked),
-              lockedForUser: Boolean(fData.locked_for_user || item.lockedForUser),
-              unlockAt: fData.unlock_at || fData.lock_info?.unlock_at || item.unlockAt || null,
-              lockExplanation: fData.lock_explanation || fData.lock_info?.lock_explanation || item.lockExplanation || null,
-              moduleName: item.moduleName,
-              source: 'module'
-            });
-          }
-        } catch (err) {
-          // 取得失敗してもタイトルだけでエントリ作成
-          fileMap.set(String(item.contentId), {
-            id: item.contentId,
-            displayName: item.title,
-            filename: item.title,
-            size: 0,
-            contentType: item.title.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream',
-            url: null,
-            isLocked: Boolean(item.isLocked),
-            lockedForUser: Boolean(item.lockedForUser),
-            unlockAt: item.unlockAt || null,
-            lockExplanation: item.lockExplanation || null,
-            moduleName: item.moduleName,
-            source: 'module'
-          });
-        }
-      }));
-    }
 
     const result = Array.from(fileMap.values());
     this.setLru(this.cache.files, cacheKey, { time: now, data: result });
@@ -1014,11 +979,20 @@ class CanvasService {
       return cached.data;
     }
 
-    const [modules, files, assignments] = await Promise.all([
-      this.getModules(courseId, forceRefresh),
-      this.getCourseFiles(courseId, forceRefresh),
-      this.getAssignments(courseId, forceRefresh, true).catch(() => [])
-    ]);
+    if (!this.pendingMaterialsPromises) {
+      this.pendingMaterialsPromises = new Map();
+    }
+    if (this.pendingMaterialsPromises.has(cacheKey)) {
+      return this.pendingMaterialsPromises.get(cacheKey);
+    }
+
+    const fetchPromise = (async () => {
+      try {
+        const [modules, files, assignments] = await Promise.all([
+          this.getModules(courseId, forceRefresh),
+          this.getCourseFiles(courseId, forceRefresh),
+          this.getAssignments(courseId, forceRefresh, true).catch(() => [])
+        ]);
 
     const fileMapById = new Map();
     files.forEach(f => fileMapById.set(String(f.id), f));
@@ -1224,9 +1198,18 @@ class CanvasService {
       } catch (_) {}
     }
 
-    this.setLru(this.cache.groupedMaterials, cacheKey, { time: now, data: grouped });
-    this.saveDiskCacheDebounced();
-    return grouped;
+        this.setLru(this.cache.groupedMaterials, cacheKey, { time: now, data: grouped });
+        this.saveDiskCacheDebounced();
+        return grouped;
+      } finally {
+        if (this.pendingMaterialsPromises) {
+          this.pendingMaterialsPromises.delete(cacheKey);
+        }
+      }
+    })();
+
+    this.pendingMaterialsPromises.set(cacheKey, fetchPromise);
+    return fetchPromise;
   }
 
   // 講義ページ（Wikiページ）の本文を取得（Canvas LMSを開かずにアプリ内で全文表示）

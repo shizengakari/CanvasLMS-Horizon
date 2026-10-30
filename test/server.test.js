@@ -545,4 +545,35 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     assert.ok(styleCss.includes('.action-chip-btn.action-locked svg'), 'style.css should style svg in action-locked');
     assert.ok(styleCss.includes('.btn-submit-action.action-locked .btn-icon'), 'style.css should style .btn-icon in action-locked');
   });
+
+  it('should optimize materials loading performance, display plain-text course title, and eliminate icon scale border distortion', async () => {
+    const rootDir = path.join(__dirname, '..');
+    const appJs = fs.readFileSync(path.join(rootDir, 'public', 'js', 'app.js'), 'utf-8');
+    const styleCss = fs.readFileSync(path.join(rootDir, 'public', 'css', 'style.css'), 'utf-8');
+    const indexHtml = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf-8');
+    const canvasServiceJs = fs.readFileSync(path.join(rootDir, 'src', 'canvasService.js'), 'utf-8');
+    const rustCanvas = fs.readFileSync(path.join(rootDir, 'src-tauri', 'src', 'canvas.rs'), 'utf-8');
+
+    // 1. ロード高速化 & バッテリー保護（個別APIリクエストループの完全排除・SWRキャッシュ・先読み・重複防止）
+    assert.ok(!canvasServiceJs.includes('fileItems.slice(i, i + batchSize)'), 'canvasService should not batch-fetch individual file URLs');
+    assert.ok(!rustCanvas.includes('for (cid_val, cid_str, it, m_name) in pending_items'), 'Rust canvas.rs should not iterate pending items sequentially');
+    assert.ok(appJs.includes('CLIENT_MATERIALS_FRESH_TTL'), 'app.js should define fresh TTL for materials');
+    assert.ok(appJs.includes('inFlightMaterialsRequests'), 'app.js should pool and deduplicate in-flight materials requests');
+    assert.ok(appJs.includes('prefetchCourseMaterials'), 'app.js should implement hover prefetching for courses');
+    assert.ok(appJs.includes('getCachedMaterialsEntry'), 'app.js should support multi-tier cache retrieval');
+    assert.ok(canvasServiceJs.includes('pendingMaterialsPromises'), 'canvasService should deduplicate in-flight materials promises');
+
+    // 2. 検索バー下の科目メニューを排除し、平文字（プレーンテキスト）の見出し表示に置き換えること
+    assert.ok(indexHtml.includes('id="material-course-header"'), 'index.html should have material-course-header');
+    assert.ok(indexHtml.includes('id="material-course-name-title"'), 'index.html should have material-course-name-title');
+    assert.ok(!indexHtml.includes('<label class="filter-label">科目:</label>'), 'index.html should no longer show redundant 科目: label');
+    assert.ok(appJs.includes('function updateMaterialsCourseHeader'), 'app.js should define updateMaterialsCourseHeader');
+    assert.ok(appJs.includes('function getSelectedCourseName'), 'app.js should define getSelectedCourseName');
+    assert.ok(styleCss.includes('.materials-course-name'), 'style.css should style .materials-course-name');
+    assert.ok(styleCss.includes('#material-course-select {\n  display: none;\n}'), 'style.css should hide #material-course-select from toolbar');
+
+    // 3. ホバー時の縁の歪み解消（.module-file-card:hover .module-file-icon の scale(1.05) 削除）
+    assert.ok(!styleCss.includes('.module-file-card:hover .module-file-icon'), 'style.css should remove hover scale on module file icon');
+    assert.ok(!styleCss.includes('transform: scale(1.05)'), 'style.css should not have scale(1.05) causing border-radius distortion');
+  });
 });

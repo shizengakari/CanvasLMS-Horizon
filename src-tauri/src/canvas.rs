@@ -1029,13 +1029,13 @@ impl CanvasService {
         }
 
         if let Ok(modules) = self.get_modules(course_id, force_refresh).await {
-            let mut pending_items = Vec::new();
             for m in &modules {
                 let m_name = m
                     .get("name")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
+                let m_locked = m.get("isLocked").and_then(|v| v.as_bool()).unwrap_or(false);
                 if let Some(items) = m.get("items").and_then(|v| v.as_array()) {
                     for it in items {
                         if it.get("type").and_then(|v| v.as_str()) == Some("File") {
@@ -1045,95 +1045,41 @@ impl CanvasService {
                                     _ => cid.to_string(),
                                 };
                                 if !file_map.contains_key(&cid_str) {
-                                    pending_items.push((
-                                        cid.clone(),
+                                    let title_str = it.get("title").and_then(|v| v.as_str()).unwrap_or("file");
+                                    let ct = if title_str.to_lowercase().ends_with(".pdf") {
+                                        "application/pdf"
+                                    } else {
+                                        "application/octet-stream"
+                                    };
+                                    let item_locked = it
+                                        .get("isLocked")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false) || m_locked;
+
+                                    file_map.insert(
                                         cid_str,
-                                        it.clone(),
-                                        m_name.clone(),
-                                    ));
+                                        json!({
+                                            "id": cid.clone(),
+                                            "displayName": title_str,
+                                            "filename": title_str,
+                                            "size": 0,
+                                            "contentType": ct,
+                                            "url": it.get("url").cloned().unwrap_or(Value::Null),
+                                            "createdAt": Value::Null,
+                                            "updatedAt": Value::Null,
+                                            "isLocked": item_locked,
+                                            "lockedForUser": item_locked,
+                                            "unlockAt": it.get("unlockAt").cloned().unwrap_or(Value::Null),
+                                            "lockExplanation": it.get("lockExplanation").cloned().unwrap_or(Value::Null),
+                                            "moduleName": m_name.clone(),
+                                            "source": "module",
+                                        }),
+                                    );
                                 }
                             }
                         }
                     }
                 }
-            }
-
-            for (cid_val, cid_str, it, m_name) in pending_items {
-                let url_str = it.get("url").and_then(|v| v.as_str()).unwrap_or("");
-                let title_str = it.get("title").and_then(|v| v.as_str()).unwrap_or("file");
-                let item_locked = it
-                    .get("isLocked")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-
-                if !url_str.is_empty() {
-                    if let Ok(f_data) = self.fetch_json(url_str).await {
-                        let resolved_name = f_data
-                            .get("display_name")
-                            .or_else(|| f_data.get("filename"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(title_str);
-                        let ct = f_data
-                            .get("content-type")
-                            .or_else(|| f_data.get("content_type"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_else(|| {
-                                if resolved_name.to_lowercase().ends_with(".pdf") {
-                                    "application/pdf"
-                                } else {
-                                    "application/octet-stream"
-                                }
-                            });
-                        let is_locked = f_data
-                            .get("locked_for_user")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false)
-                            || f_data
-                                .get("hidden_for_user")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                            || item_locked;
-
-                        file_map.insert(
-              cid_str,
-              json!({
-                "id": cid_val,
-                "displayName": resolved_name,
-                "filename": f_data.get("filename").and_then(|v| v.as_str()).unwrap_or(resolved_name),
-                "size": f_data.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
-                "contentType": ct,
-                "url": f_data.get("url").cloned().unwrap_or(Value::Null),
-                "createdAt": f_data.get("created_at").cloned().unwrap_or(Value::Null),
-                "updatedAt": f_data.get("updated_at").cloned().unwrap_or(Value::Null),
-                "isLocked": is_locked,
-                "lockedForUser": is_locked,
-                "unlockAt": f_data.get("unlock_at").or_else(|| it.get("unlockAt")).cloned().unwrap_or(Value::Null),
-                "lockExplanation": f_data.get("lock_explanation").or_else(|| it.get("lockExplanation")).cloned().unwrap_or(Value::Null),
-                "moduleName": m_name,
-                "source": "module",
-              }),
-            );
-                        continue;
-                    }
-                }
-
-                file_map.insert(
-          cid_str,
-          json!({
-            "id": cid_val,
-            "displayName": title_str,
-            "filename": title_str,
-            "size": 0,
-            "contentType": if title_str.to_lowercase().ends_with(".pdf") { "application/pdf" } else { "application/octet-stream" },
-            "url": Value::Null,
-            "isLocked": item_locked,
-            "lockedForUser": item_locked,
-            "unlockAt": it.get("unlockAt").cloned().unwrap_or(Value::Null),
-            "lockExplanation": it.get("lockExplanation").cloned().unwrap_or(Value::Null),
-            "moduleName": m_name,
-            "source": "module",
-          }),
-        );
             }
         }
 
