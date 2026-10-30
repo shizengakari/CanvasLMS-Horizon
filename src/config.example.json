@@ -1,8 +1,0 @@
-{
-  "baseUrl": "https://<your-university>.instructure.com",
-  "apiToken": "",
-  "theme": "dark",
-  "currentQuarter": "",
-  "batterySaver": false,
-  "pollIntervalMin": 15
-}

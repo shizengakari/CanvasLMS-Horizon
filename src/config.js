@@ -58,11 +58,14 @@ function loadConfig() {
   }
 
   // batteryMode と batterySaver の相互互換性
-  if (config.batteryMode === undefined && config.batterySaver !== undefined) {
-    config.batteryMode = config.batterySaver ? 'on' : 'off';
-  } else if (config.batteryMode !== undefined) {
-    config.batterySaver = config.batteryMode === 'on';
+  if (!config.batteryMode || !['auto', 'on', 'off'].includes(config.batteryMode)) {
+    if (config.batterySaver !== undefined) {
+      config.batteryMode = config.batterySaver ? 'on' : 'auto';
+    } else {
+      config.batteryMode = 'auto';
+    }
   }
+  config.batterySaver = config.batteryMode === 'on';
 
   // githubRepo の正規化 (旧リポジトリ名や未設定の場合は公式リポジトリを適用)
   const OFFICIAL_REPO = 'shizengakari/CanvasLMS-Horizon';
@@ -91,9 +94,15 @@ function saveConfig(newConfig) {
     const current = loadConfig();
     const merged = { ...current, ...newConfig };
     if (newConfig.batteryMode !== undefined) {
-      merged.batterySaver = newConfig.batteryMode === 'on';
+      if (['auto', 'on', 'off'].includes(newConfig.batteryMode)) {
+        merged.batteryMode = newConfig.batteryMode;
+      } else {
+        merged.batteryMode = 'auto';
+      }
+      merged.batterySaver = merged.batteryMode === 'on';
     } else if (newConfig.batterySaver !== undefined) {
-      merged.batteryMode = newConfig.batterySaver ? 'on' : 'off';
+      merged.batterySaver = Boolean(newConfig.batterySaver);
+      merged.batteryMode = merged.batterySaver ? 'on' : 'auto';
     }
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2), 'utf-8');
     return true;

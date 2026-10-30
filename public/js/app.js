@@ -1459,6 +1459,7 @@ async function setupBatteryManager() {
   document.querySelectorAll('.battery-segment-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       const mode = btn.dataset.batteryMode;
+      if (!['auto', 'on', 'off'].includes(mode)) return;
       state.batteryMode = mode;
       try {
         localStorage.setItem(STORAGE_KEY_BATTERY_MODE, mode);
@@ -1483,10 +1484,21 @@ async function setupBatteryManager() {
     }
   }).catch(() => {});
 
-  // バックグラウンド・最小化時のリソース最適化（非表示時は進行中のアニメーション・ポーリング・VRAMを完全休止）
+  // バックグラウンド・最小化時のリソース最適化（非表示時は進行中のアニメーション・ポーリング・動画再生を休止）
   document.addEventListener('visibilitychange', () => {
     document.body.classList.toggle('app-hidden', document.hidden);
     if (document.hidden) {
+      // 画面非表示時はすべての動画・音声の再生を一時停止してCPU・GPU・バッテリーを保護
+      const activeVideos = document.querySelectorAll('video, audio');
+      activeVideos.forEach(v => {
+        try {
+          if (!v.paused) {
+            v.dataset.pausedByVisibility = 'true';
+            v.pause();
+          }
+        } catch (_) {}
+      });
+
       if (window._petalAnimId) {
         cancelAnimationFrame(window._petalAnimId);
         window._petalAnimId = null;
@@ -1501,7 +1513,13 @@ async function setupBatteryManager() {
         downloadManager.stopPolling();
       }
     } else {
-      // 画面復帰時、進行中のダウンロードがあれば速やかにポーリングを再開
+      // 画面復帰時、フラグを解除
+      const suspendedVideos = document.querySelectorAll('video[data-paused-by-visibility="true"], audio[data-paused-by-visibility="true"]');
+      suspendedVideos.forEach(v => {
+        delete v.dataset.pausedByVisibility;
+      });
+
+      // 進行中のダウンロードがあれば速やかにポーリングを再開
       if (typeof downloadManager !== 'undefined' && downloadManager.jobs && downloadManager.jobs.some(j => j.status === 'downloading')) {
         downloadManager.startPolling();
       }
@@ -1616,7 +1634,7 @@ async function initApp() {
       if (meRes.config && meRes.config.currentQuarter !== undefined) {
         state.currentQuarter = meRes.config.currentQuarter;
       }
-      if (meRes.config && meRes.config.batteryMode !== undefined) {
+      if (meRes?.config?.batteryMode && ['auto', 'on', 'off'].includes(meRes.config.batteryMode)) {
         state.batteryMode = meRes.config.batteryMode;
         try { localStorage.setItem(STORAGE_KEY_BATTERY_MODE, meRes.config.batteryMode); } catch (_) {}
         if (window.evaluateAppBatterySaving) window.evaluateAppBatterySaving();
@@ -2773,6 +2791,40 @@ function renderAssignmentSubmissionHistory(submission, assignment) {
 }
 
 // ==========================================================================
+// メディア・リソース・メモリ完全解放マネージャー (バックグラウンド再生防止 & バッテリー保護)
+// ==========================================================================
+function cleanupMediaAndResources(container, fullPurge = false) {
+  if (!container) return;
+
+  // 1. video / audio 要素の再生停止とバッファ解放
+  const mediaElements = container.querySelectorAll('video, audio');
+  mediaElements.forEach(media => {
+    try {
+      media.pause();
+      if (fullPurge) {
+        media.removeAttribute('src');
+        const sources = media.querySelectorAll('source');
+        sources.forEach(s => s.remove());
+        media.load(); // ブラウザ/WebViewのGPUデコーダとメモリバッファを強制解放
+      }
+    } catch (_) {}
+  });
+
+  // 2. iframe 要素の停止とアンロード
+  const iframes = container.querySelectorAll('iframe');
+  iframes.forEach(iframe => {
+    try {
+      iframe.contentWindow?.stop?.();
+    } catch (_) {}
+    if (fullPurge) {
+      try {
+        iframe.src = 'about:blank';
+      } catch (_) {}
+    }
+  });
+}
+
+// ==========================================================================
 // 統合モーダル画面遷移スタック (モーダル背後隠れ防止 & 「← 戻る」ナビゲーション)
 // ==========================================================================
 let currentPageModalCourseId = null;
@@ -2894,11 +2946,17 @@ const modalNav = {
 
   hideModalSilently(modalId) {
     if (modalId === 'assignment-modal') {
-      document.getElementById('assignment-modal')?.classList.remove('open');
+      const modal = document.getElementById('assignment-modal');
+      const descBox = document.getElementById('modal-description');
+      if (descBox) cleanupMediaAndResources(descBox, false);
+      modal?.classList.remove('open');
       if (isAssignmentFullscreen) toggleAssignmentFullscreen(false);
       if (isEditorWide) toggleEditorWide(false);
     } else if (modalId === 'page-modal') {
-      document.getElementById('page-modal')?.classList.remove('open');
+      const modal = document.getElementById('page-modal');
+      const bodyEl = document.getElementById('page-modal-body');
+      if (bodyEl) cleanupMediaAndResources(bodyEl, false);
+      modal?.classList.remove('open');
       if (isPageFullscreen) togglePageFullscreen(false);
     } else if (modalId === 'pdf-modal') {
       closePdfModal(true);
@@ -3346,13 +3404,26 @@ function toggleEditorWide(forceState) {
 }
 
 function closeAssignmentModal(preserveNav = false) {
-  document.getElementById('assignment-modal').classList.remove('open');
+  const modal = document.getElementById('assignment-modal');
+  const descBox = document.getElementById('modal-description');
+  if (modal) modal.classList.remove('open');
   if (isAssignmentFullscreen) {
     toggleAssignmentFullscreen(false);
   }
   if (isEditorWide) {
     toggleEditorWide(false);
   }
+
+  // 課題説明内の埋め込み動画・音声・リソースの停止とメモリ解放
+  if (descBox) {
+    if (preserveNav) {
+      cleanupMediaAndResources(descBox, false);
+    } else {
+      cleanupMediaAndResources(descBox, true);
+      descBox.innerHTML = '';
+    }
+  }
+
   state.currentModalAssignment = null;
   state.filesQueue = [];
   if (!preserveNav) {
@@ -4763,10 +4834,25 @@ function togglePageFullscreen(forceState) {
 
 function closePageModal(preserveNav = false) {
   const modal = document.getElementById('page-modal');
+  const bodyEl = document.getElementById('page-modal-body');
   if (modal) modal.classList.remove('open');
   if (isPageFullscreen) {
     togglePageFullscreen(false);
   }
+
+  // 講義ノート内の動画・音声・iframe等の完全停止とメモリ解放
+  if (bodyEl) {
+    if (preserveNav) {
+      // 画面スタックに残す場合は一時停止（音声停止・CPU浪費防止）
+      cleanupMediaAndResources(bodyEl, false);
+    } else {
+      // 完全に閉じる場合は動画バッファ・GPUリソース・DOMツリーを完全解放
+      cleanupMediaAndResources(bodyEl, true);
+      bodyEl.innerHTML = '';
+      currentPageModalCourseId = null;
+    }
+  }
+
   if (!preserveNav) {
     modalNav.clearStack();
   }
@@ -5109,6 +5195,8 @@ function closePdfModal(preserveNav = false) {
     spinner.style.display = 'none';
   }
   if (customPreview) {
+    // プレビュー内の音声・動画・リソースの確実な停止とメモリ解放
+    cleanupMediaAndResources(customPreview, true);
     customPreview.style.display = 'none';
     customPreview.innerHTML = '';
   }
@@ -5206,8 +5294,9 @@ function closeYouTubeModal(preserveNav = false) {
   if (isYouTubeFullscreen) {
     toggleYouTubeFullscreen(false);
   }
-  // iframeの破棄および再生停止
+  // iframe / 動画の確実な停止およびメモリ解放
   if (container) {
+    cleanupMediaAndResources(container, true);
     container.innerHTML = '';
   }
   currentYtVideoInfo = null;

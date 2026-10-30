@@ -104,7 +104,7 @@ app.get('/api/me', async (req, res) => {
         isConfigured,
         theme: config.theme,
         currentQuarter: config.currentQuarter || '',
-        batteryMode: config.batteryMode || (config.batterySaver ? 'on' : 'auto'),
+        batteryMode: config.batteryMode || 'auto',
         batterySaver: config.batterySaver,
         pollIntervalMin: config.pollIntervalMin || 15
       }
@@ -119,7 +119,7 @@ app.get('/api/me', async (req, res) => {
         isConfigured,
         theme: config.theme,
         currentQuarter: config.currentQuarter || '',
-        batteryMode: config.batteryMode || (config.batterySaver ? 'on' : 'auto'),
+        batteryMode: config.batteryMode || 'auto',
         batterySaver: config.batterySaver
       }
     });
