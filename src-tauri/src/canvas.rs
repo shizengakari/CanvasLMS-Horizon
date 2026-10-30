@@ -913,9 +913,32 @@ impl CanvasService {
               .cloned()
               .unwrap_or(Value::Null);
 
+            let disp_name = cd
+              .and_then(|c| c.get("display_name").or_else(|| c.get("filename")))
+              .or_else(|| it.get("title"))
+              .cloned()
+              .unwrap_or(Value::Null);
+            let fname = cd
+              .and_then(|c| c.get("filename").or_else(|| c.get("display_name")))
+              .or_else(|| it.get("title"))
+              .cloned()
+              .unwrap_or(Value::Null);
+            let ctype = cd
+              .and_then(|c| c.get("content_type").or_else(|| c.get("content-type")))
+              .cloned()
+              .unwrap_or(Value::Null);
+            let sz = cd
+              .and_then(|c| c.get("size"))
+              .cloned()
+              .unwrap_or(Value::Null);
+
             json!({
               "id": it.get("id").cloned().unwrap_or(Value::Null),
               "title": it.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+              "displayName": disp_name,
+              "filename": fname,
+              "contentType": ctype,
+              "size": sz,
               "type": it.get("type").and_then(|v| v.as_str()).unwrap_or(""),
               "contentId": it.get("content_id").cloned().unwrap_or(Value::Null),
               "pageUrl": it.get("page_url").cloned().unwrap_or(Value::Null),
@@ -1046,11 +1069,15 @@ impl CanvasService {
                                 };
                                 if !file_map.contains_key(&cid_str) {
                                     let title_str = it.get("title").and_then(|v| v.as_str()).unwrap_or("file");
-                                    let ct = if title_str.to_lowercase().ends_with(".pdf") {
-                                        "application/pdf"
-                                    } else {
-                                        "application/octet-stream"
-                                    };
+                                    let disp_str = it.get("displayName").and_then(|v| v.as_str()).unwrap_or(title_str);
+                                    let fname_str = it.get("filename").and_then(|v| v.as_str()).unwrap_or(title_str);
+                                    let is_pdf = disp_str.to_lowercase().ends_with(".pdf")
+                                        || fname_str.to_lowercase().ends_with(".pdf")
+                                        || !disp_str.contains('.');
+                                    let ct = it.get("contentType").and_then(|v| v.as_str()).unwrap_or(
+                                        if is_pdf { "application/pdf" } else { "application/octet-stream" }
+                                    );
+                                    let sz = it.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
                                     let item_locked = it
                                         .get("isLocked")
                                         .and_then(|v| v.as_bool())
@@ -1060,9 +1087,9 @@ impl CanvasService {
                                         cid_str,
                                         json!({
                                             "id": cid.clone(),
-                                            "displayName": title_str,
-                                            "filename": title_str,
-                                            "size": 0,
+                                            "displayName": disp_str,
+                                            "filename": fname_str,
+                                            "size": sz,
                                             "contentType": ct,
                                             "url": it.get("url").cloned().unwrap_or(Value::Null),
                                             "createdAt": Value::Null,
@@ -1186,6 +1213,16 @@ impl CanvasService {
                                         it.get("indent").cloned().unwrap_or(json!(0)),
                                     );
                                     obj.insert("type".to_string(), json!("File"));
+                                    if !obj.contains_key("contentType") || obj.get("contentType").map_or(true, |v| v.is_null()) {
+                                        if let Some(ct) = it.get("contentType").filter(|v| !v.is_null()) {
+                                            obj.insert("contentType".to_string(), ct.clone());
+                                        }
+                                    }
+                                    if obj.get("size").and_then(|v| v.as_u64()).unwrap_or(0) == 0 {
+                                        if let Some(sz) = it.get("size").filter(|v| !v.is_null()) {
+                                            obj.insert("size".to_string(), sz.clone());
+                                        }
+                                    }
                                 }
                                 module_items.push(merged);
                                 continue;

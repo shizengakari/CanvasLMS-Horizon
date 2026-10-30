@@ -576,4 +576,29 @@ describe('Server Endpoints & Cache Invalidation Whitebox Tests', () => {
     assert.ok(!styleCss.includes('.module-file-card:hover .module-file-icon'), 'style.css should remove hover scale on module file icon');
     assert.ok(!styleCss.includes('transform: scale(1.05)'), 'style.css should not have scale(1.05) causing border-radius distortion');
   });
+
+  it('should accurately detect and display PDFs without extension, preserve file sizes and preview behavior', () => {
+    const rootDir = path.join(__dirname, '..');
+    const appJs = fs.readFileSync(path.join(rootDir, 'public', 'js', 'app.js'), 'utf-8');
+    const canvasServiceJs = fs.readFileSync(path.join(rootDir, 'src', 'canvasService.js'), 'utf-8');
+    const rustCanvas = fs.readFileSync(path.join(rootDir, 'src-tauri', 'src', 'canvas.rs'), 'utf-8');
+
+    // 1. canvasService.js: content_details から displayName, filename, contentType, size を取得すること
+    assert.ok(canvasServiceJs.includes('const cd = it.content_details || {};'), 'canvasService should read content_details');
+    assert.ok(canvasServiceJs.includes('resolvedContentType'), 'canvasService should resolve content type');
+    assert.ok(canvasServiceJs.includes('resolvedSize'), 'canvasService should resolve size');
+
+    // 2. canvas.rs: content_details から display_name, filename, content_type, size を取得すること
+    assert.ok(rustCanvas.includes('"displayName": disp_name'), 'Rust canvas.rs should serialize displayName');
+    assert.ok(rustCanvas.includes('"contentType": ctype'), 'Rust canvas.rs should serialize contentType');
+    assert.ok(rustCanvas.includes('"size": sz'), 'Rust canvas.rs should serialize size');
+
+    // 3. app.js: utils.getFileExt が isPdf や contentType に応じて PDF を返すこと
+    assert.ok(appJs.includes("getFileExt(filename, contentType = '', isPdf = false)"), 'app.js should accept contentType and isPdf in getFileExt');
+    assert.ok(appJs.includes("if (isPdf || contentType === 'application/pdf') return 'PDF';"), 'app.js should return PDF when isPdf or application/pdf');
+
+    // 4. app.js: 日本語タイトル等で拡張子がないファイルでも PDF として判定され、プレビューおよび赤色アイコンになること
+    assert.ok(appJs.includes('const isKnownNonPdf'), 'app.js should detect non-pdf extensions');
+    assert.ok(appJs.includes("(!isKnownNonPdf && (!it.contentType || it.contentType === 'application/octet-stream'))"), 'app.js should fallback to PDF for module files without non-pdf extension');
+  });
 });

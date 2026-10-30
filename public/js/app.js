@@ -267,10 +267,15 @@ const utils = {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   },
 
-  getFileExt(filename) {
-    if (!filename) return '';
+  getFileExt(filename, contentType = '', isPdf = false) {
+    if (isPdf || contentType === 'application/pdf') return 'PDF';
+    if (!filename) return isPdf ? 'PDF' : 'FILE';
     const parts = filename.split('.');
-    return parts.length > 1 ? parts.pop().toUpperCase() : 'FILE';
+    if (parts.length > 1) {
+      const ext = parts.pop().trim().toUpperCase();
+      if (ext && ext.length <= 8) return ext;
+    }
+    return isPdf ? 'PDF' : 'FILE';
   },
 
   renderQuarterBadge(quarter, isCurrent = false) {
@@ -4258,9 +4263,18 @@ function renderGroupedMaterials(modules) {
       const isQuiz = it.type === 'Quiz';
 
       const title = utils.normalizeFileName(it.displayName || it.filename || it.title, '資料');
-      const fileCategory = isFile ? utils.classifyFile(title || it.url, it.contentType) : 'unknown';
-      const isPdf = isFile && fileCategory === 'pdf';
-      const isPreviewableFile = isFile && utils.isPreviewableCategory(fileCategory);
+      const rawExt = utils.extractCleanExtension(it.filename) || utils.extractCleanExtension(it.displayName) || utils.extractCleanExtension(title) || utils.extractCleanExtension(it.url);
+      const isKnownNonPdf = ['.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt', '.zip', '.mp4', '.mov', '.png', '.jpg', '.jpeg', '.csv', '.txt'].includes(rawExt);
+
+      const fileCategory = isFile ? utils.classifyFile(it.filename || it.displayName || title || it.url, it.contentType) : 'unknown';
+      // PDF判定: classifyFileでpdf、またはMIMEがpdf、またはファイル名に.pdf、またはFile種別で明示的な非PDF拡張子がない（日本の大学講義資料の特性をカバー）
+      const isPdf = isFile && (
+        fileCategory === 'pdf' ||
+        it.contentType === 'application/pdf' ||
+        rawExt === '.pdf' ||
+        (!isKnownNonPdf && (!it.contentType || it.contentType === 'application/octet-stream'))
+      );
+      const isPreviewableFile = isFile && (isPdf || utils.isPreviewableCategory(fileCategory));
       const isLockedItem = Boolean(
         it.isLocked ||
         it.lockedForUser ||
@@ -4372,7 +4386,8 @@ function renderGroupedMaterials(modules) {
       } else if (ytId) {
         metaHtml = `<span>YouTube</span>`;
       } else if (isFile) {
-        metaHtml = `<span>${utils.getFileExt(title)} ${it.size ? `・ ${utils.formatBytes(it.size)}` : ''}</span>`;
+        const ext = isPdf ? 'PDF' : utils.getFileExt(it.filename || it.displayName || title, it.contentType, isPdf);
+        metaHtml = `<span>${ext}${it.size ? ` ・ ${utils.formatBytes(it.size)}` : ''}</span>`;
       } else {
         metaHtml = `<span>リンク</span>`;
       }

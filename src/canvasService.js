@@ -860,12 +860,22 @@ class CanvasService {
           const isItemPublished = it.published !== false && it.workflow_state !== 'unpublished' && isModulePublished;
           const isItemCompleted = Boolean(it.completion_requirement && it.completion_requirement.completed);
 
+          const cd = it.content_details || {};
+          const resolvedDisplayName = cd.display_name || cd.filename || it.title || '資料';
+          const resolvedFilename = cd.filename || cd.display_name || it.title || '資料';
+          const resolvedContentType = cd['content-type'] || cd.content_type || null;
+          const resolvedSize = typeof cd.size === 'number' ? cd.size : (cd.size ? parseInt(cd.size, 10) : null);
+
           return {
             id: it.id,
             title: it.title,
+            displayName: resolvedDisplayName,
+            filename: resolvedFilename,
+            contentType: resolvedContentType,
+            size: resolvedSize,
             type: it.type, // 'File', 'Assignment', 'Page', 'ExternalUrl', 'Quiz' など
             contentId: it.content_id,
-            quizId: it.content_details?.quiz_id || (it.type === 'Quiz' ? it.content_id : null) || null,
+            quizId: cd.quiz_id || (it.type === 'Quiz' ? it.content_id : null) || null,
             pageUrl: it.page_url || null,
             htmlUrl: it.html_url,
             url: it.url, // ファイル解決用API URL
@@ -873,11 +883,11 @@ class CanvasService {
             published: isItemPublished,
             workflowState: it.workflow_state || null,
             isCompleted: isItemCompleted,
-            lockedForUser: Boolean(it.locked_for_user || it.content_details?.locked_for_user),
+            lockedForUser: Boolean(it.locked_for_user || cd.locked_for_user),
             isLocked: isItemLocked,
-            lockInfo: it.lock_info || it.content_details?.lock_info || null,
+            lockInfo: it.lock_info || cd.lock_info || null,
             unlockAt: itemUnlockAt,
-            lockExplanation: it.lock_explanation || it.lock_info?.lock_explanation || it.content_details?.lock_explanation || null
+            lockExplanation: it.lock_explanation || it.lock_info?.lock_explanation || cd.lock_explanation || null
           };
         })
       };
@@ -942,13 +952,16 @@ class CanvasService {
       (m.items || []).forEach(it => {
         if (it.type === 'File' && it.contentId && !fileMap.has(String(it.contentId))) {
           const title = it.title || 'ファイル';
-          const isPdf = title.toLowerCase().endsWith('.pdf');
+          const resolvedName = it.displayName || it.filename || title;
+          const isPdf = resolvedName.toLowerCase().endsWith('.pdf') ||
+                        it.contentType === 'application/pdf' ||
+                        !resolvedName.includes('.'); // 拡張子がない講義資料はPDFデフォルト
           fileMap.set(String(it.contentId), {
             id: it.contentId,
-            displayName: title,
-            filename: title,
-            size: 0,
-            contentType: isPdf ? 'application/pdf' : 'application/octet-stream',
+            displayName: resolvedName,
+            filename: it.filename || resolvedName,
+            size: it.size || 0,
+            contentType: it.contentType || (isPdf ? 'application/pdf' : 'application/octet-stream'),
             url: it.url || null,
             createdAt: null,
             updatedAt: null,
@@ -1022,16 +1035,22 @@ class CanvasService {
 
         if (it.type === 'File') {
           const resolved = fileMapById.get(String(it.contentId)) || {};
-          const resolvedDisplayName = resolved.displayName || it.title;
+          const resolvedDisplayName = resolved.displayName || it.displayName || it.title;
+          const resolvedFilename = resolved.filename || it.filename || resolvedDisplayName;
+          const resolvedSize = resolved.size || it.size || 0;
+          const resolvedContentType = resolved.contentType || it.contentType || 
+            (resolvedDisplayName.toLowerCase().endsWith('.pdf') || resolvedFilename.toLowerCase().endsWith('.pdf') || !resolvedDisplayName.includes('.')
+              ? 'application/pdf' : 'application/octet-stream');
+
           moduleFiles.push({
             id: it.contentId,
             itemId: it.id,
             title: it.title,
             displayName: resolvedDisplayName,
-            filename: resolved.filename || resolvedDisplayName,
-            size: resolved.size || 0,
-            contentType: resolved.contentType || (resolvedDisplayName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream'),
-            url: resolved.url || null,
+            filename: resolvedFilename,
+            size: resolvedSize,
+            contentType: resolvedContentType,
+            url: resolved.url || it.url || null,
             type: 'File',
             htmlUrl: it.htmlUrl,
             ...commonProps,
