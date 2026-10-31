@@ -324,13 +324,21 @@ const utils = {
 
   stripHtml(html) {
     if (!html) return '';
-    const tmp = document.createElement('div');
-    tmp.innerHTML = String(html)
+    // ライブdiv.innerHTMLへの代入を排除し、文字列処理のみで高速・安全にプレーンテキスト抽出（不要な画像プリフェッチを防止）
+    return String(html)
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
       .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/p>/gi, '\n\n')
-      .replace(/<\/div>/gi, '\n')
-      .replace(/<\/li>/gi, '\n');
-    return (tmp.textContent || tmp.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+      .replace(/<\/(?:p|div|li|tr|h[1-6])>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
   },
 
   normalizeFileName(rawName, fallback = 'download') {
@@ -455,7 +463,8 @@ const api = {
   _cache: new Map(),
 
   async get(url, options = {}) {
-    const { bypassCache = false, ttl = 0 } = options;
+    const { bypassCache = false } = options;
+    const ttl = options.ttl !== undefined ? options.ttl : (url === '/api/config' ? 5000 : 0);
     const now = Date.now();
 
     // 1. キャッシュの有効性チェック（TTL指定時）
@@ -751,9 +760,10 @@ const downloadManager = {
   },
 
   render() {
-    if (!this.listEl) return;
+    if (!this.listEl || !this.isPanelOpen) return;
 
     if (this.jobs.length === 0) {
+      this._lastStructSig = '';
       this.listEl.innerHTML = '<p class="download-empty">進行中のダウンロードはありません</p>';
       if (this.summaryEl) this.summaryEl.style.display = 'none';
       return;
@@ -773,12 +783,39 @@ const downloadManager = {
       }
     }
 
+    const getStatusText = (job) => {
+      const progress = Math.min(100, Math.max(0, job.progress || 0));
+      if (job.status === 'completed') return '✓ 保存完了';
+      if (job.status === 'failed') return `✕ 失敗: ${job.error || '保存エラー'}`;
+      if (job.status === 'cancelled') return 'キャンセル';
+      if (job.status === 'downloading') return `${progress}% • ${job.message || ''}`;
+      return job.message || '';
+    };
+
+    // 構造（ジョブID・状態・完了パス有無）が変化していない場合はDOM要素を再生成せず進捗のみ差分更新（ボタンクリック消失を防止）
+    const structSig = this.jobs.map(j => `${j.id}:${j.status}:${Boolean(j.fullPath)}`).join('|');
+    if (this._lastStructSig === structSig) {
+      let allPatched = true;
+      for (const job of this.jobs) {
+        const itemEl = this.listEl.querySelector(`.download-item[data-id="${CSS.escape(job.id)}"]`);
+        if (!itemEl) {
+          allPatched = false;
+          break;
+        }
+        const progress = Math.min(100, Math.max(0, job.progress || 0));
+        const statusEl = itemEl.querySelector('.download-item-status');
+        if (statusEl) statusEl.textContent = getStatusText(job);
+        const barSpan = itemEl.querySelector('.download-progress span');
+        if (barSpan) barSpan.style.width = `${progress}%`;
+      }
+      if (allPatched) return;
+    }
+    this._lastStructSig = structSig;
+
     try {
       this.listEl.innerHTML = this.jobs.map(job => {
         const isYt = job.type === 'youtube';
         const isCompleted = job.status === 'completed';
-        const isFailed = job.status === 'failed';
-        const isCancelled = job.status === 'cancelled';
         const isDownloading = job.status === 'downloading';
         const progress = Math.min(100, Math.max(0, job.progress || 0));
 
@@ -786,17 +823,7 @@ const downloadManager = {
           ? `<div class="download-item-icon youtube" title="YouTube動画"><svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg></div>`
           : `<div class="download-item-icon" title="講義資料・ファイル"><svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg></div>`;
 
-        let statusText = job.message || '';
-        if (isCompleted) {
-          statusText = `✓ 保存完了`;
-        } else if (isFailed) {
-          statusText = `✕ 失敗: ${job.error || '保存エラー'}`;
-        } else if (isCancelled) {
-          statusText = `キャンセル`;
-        } else if (isDownloading) {
-          statusText = `${progress}% • ${statusText}`;
-        }
-
+        const statusText = getStatusText(job);
         const safeTitle = utils.escapeHtml(job.title || 'ダウンロード');
         const safeDir = job.saveDir ? utils.escapeHtml(job.saveDir) : '';
 
@@ -2241,7 +2268,7 @@ function renderAssignmentsList() {
 
 // タイムラインセクション別グルーピング描画 (重複表記を廃止した極めてシンプルで洗練された見出し)
 function renderGroupedTimelineList(container, assignments) {
-  const now = new Date();
+  const nowMs = Date.now();
 
   const groups = {
     urgent: {
@@ -2286,8 +2313,8 @@ function renderGroupedTimelineList(container, assignments) {
       groups.noDue.items.push(a);
       return;
     }
-    const due = new Date(a.dueAt);
-    const diffHours = (due - now) / (1000 * 60 * 60);
+    const dueMs = (a.dueTime !== undefined && a.dueTime > 0) ? a.dueTime : (a.dueTime = Date.parse(a.dueAt) || 0);
+    const diffHours = (dueMs - nowMs) / (1000 * 60 * 60);
 
     // 締め切りが24時間以上過ぎた未提出かつ未完了のものは自動非表示にする
     if (diffHours < -24) {
@@ -3700,18 +3727,18 @@ async function executeBulkSubmission() {
       showToast(`課題を提出しました（合計 ${totalCount} 件）`, 'success');
       triggerConfetti();
 
-      invalidateCourseMaterialsCache(courseId);
       syncAssignmentSubmissionState(courseId, assignmentId, {
         ...(res.result?.submission || {}),
         isSubmitted: true
       });
-      await loadAllAssignments(true);
+      // 全コース強制再フェッチによるモーダル閉じ待ちを排除し、バックグラウンドで対象コースのみ非同期同期
+      loadAllAssignments(false);
       if (state.materialsCourseId && String(state.materialsCourseId) === String(courseId)) {
         loadCourseMaterialsGrouped(state.materialsCourseId, true);
       }
       setTimeout(() => {
         closeAssignmentModal();
-      }, 1200);
+      }, 600);
     } else {
       throw new Error(res.error || '提出に失敗しました');
     }
@@ -3758,19 +3785,18 @@ async function executeTextSubmission() {
     if (res.success) {
       showToast('テキスト課題の提出が完了しました', 'success');
       triggerConfetti();
-      invalidateCourseMaterialsCache(courseId);
       syncAssignmentSubmissionState(courseId, assignmentId, {
         ...(res.submission || {}),
         body: textBody,
         isSubmitted: true
       });
-      await loadAllAssignments(true);
+      loadAllAssignments(false);
       if (state.materialsCourseId && String(state.materialsCourseId) === String(courseId)) {
         loadCourseMaterialsGrouped(state.materialsCourseId, true);
       }
       setTimeout(() => {
         closeAssignmentModal();
-      }, 1200);
+      }, 600);
     } else {
       throw new Error(res.error || '提出に失敗しました');
     }
@@ -3821,19 +3847,18 @@ async function executeUrlSubmission() {
     if (res.success) {
       showToast('URL課題の提出が完了しました', 'success');
       triggerConfetti();
-      invalidateCourseMaterialsCache(courseId);
       syncAssignmentSubmissionState(courseId, assignmentId, {
         ...(res.submission || {}),
         url: inputUrl,
         isSubmitted: true
       });
-      await loadAllAssignments(true);
+      loadAllAssignments(false);
       if (state.materialsCourseId && String(state.materialsCourseId) === String(courseId)) {
         loadCourseMaterialsGrouped(state.materialsCourseId, true);
       }
       setTimeout(() => {
         closeAssignmentModal();
-      }, 1200);
+      }, 600);
     } else {
       throw new Error(res.error || '提出に失敗しました');
     }
@@ -3866,11 +3891,18 @@ function setupMaterialsViewEvents() {
   if (toggleAllBtn) {
     toggleAllBtn.addEventListener('click', () => {
       areAllModulesCollapsed = !areAllModulesCollapsed;
+      const container = document.getElementById('grouped-modules-container');
+      if (container) container.classList.add('bulk-toggling');
       document.querySelectorAll('.module-group').forEach(grp => {
         grp.classList.toggle('collapsed', areAllModulesCollapsed);
       });
       if (toggleAllLabel) {
         toggleAllLabel.textContent = areAllModulesCollapsed ? 'すべて展開する' : 'すべて折りたたむ';
+      }
+      if (container) {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => container.classList.remove('bulk-toggling'));
+        });
       }
     });
   }
@@ -3900,21 +3932,29 @@ function setupMaterialsViewEvents() {
 }
 
 function filterMaterialsInDom(query) {
-  const groups = document.querySelectorAll('.module-group');
+  const container = document.getElementById('grouped-modules-container');
+  const groups = container?._groups || document.querySelectorAll('.module-group');
   groups.forEach(group => {
-    const titleText = group.querySelector('.module-group-title span')?.textContent.toLowerCase() || '';
-    const cards = group.querySelectorAll('.module-file-card');
+    const titleText = group._titleLower !== undefined
+      ? group._titleLower
+      : (group.querySelector('.module-group-title span')?.textContent.toLowerCase() || '');
+    const titleMatches = !query || titleText.includes(query);
+    const cards = group._cards || group.querySelectorAll('.module-file-card');
     let hasMatch = false;
 
     cards.forEach(card => {
-      const cardTitle = card.querySelector('.module-file-title')?.textContent.toLowerCase() || '';
-      const cardMeta = card.querySelector('.module-file-meta')?.textContent.toLowerCase() || '';
-      const matches = !query || cardTitle.includes(query) || cardMeta.includes(query) || titleText.includes(query);
+      let matches = titleMatches;
+      if (!matches) {
+        const searchStr = card._searchStr !== undefined
+          ? card._searchStr
+          : `${card.querySelector('.module-file-title')?.textContent || ''} ${card.querySelector('.module-file-meta')?.textContent || ''} ${card.dataset.searchExtra || ''}`.toLowerCase();
+        matches = searchStr.includes(query);
+      }
       card.style.display = matches ? 'flex' : 'none';
       if (matches) hasMatch = true;
     });
 
-    group.style.display = (!query || hasMatch || titleText.includes(query)) ? 'block' : 'none';
+    group.style.display = (!query || hasMatch || titleMatches) ? 'block' : 'none';
     if (query && hasMatch) {
       group.classList.remove('collapsed');
     }
@@ -4169,8 +4209,29 @@ async function loadCourseMaterialsGrouped(courseId, forceRefresh = false) {
       if (String(state.materialsCourseId) !== targetId) return;
 
       if (res && res.success && res.modules) {
-        // データに実際の変更があった場合のみ再描画（不要なDOM再構築によるCPU消費を防ぐ）
-        const isSame = JSON.stringify(cachedEntry.data) === JSON.stringify(res.modules);
+        // 軽量な高速変更検知（長大な2重JSON.stringifyの前に件数・ID・提出状態を比較）
+        let isSame = Array.isArray(cachedEntry.data) && cachedEntry.data.length === res.modules.length;
+        if (isSame) {
+          for (let i = 0; i < res.modules.length; i++) {
+            const oldMod = cachedEntry.data[i];
+            const newMod = res.modules[i];
+            const oldItems = oldMod?.items || [];
+            const newItems = newMod?.items || [];
+            if (!oldMod || oldMod.id !== newMod.id || oldMod.name !== newMod.name || oldItems.length !== newItems.length) {
+              isSame = false;
+              break;
+            }
+            for (let j = 0; j < newItems.length; j++) {
+              const oi = oldItems[j];
+              const ni = newItems[j];
+              if (oi.id !== ni.id || oi.title !== ni.title || oi.isSubmitted !== ni.isSubmitted || oi.isGraded !== ni.isGraded || oi.isLocked !== ni.isLocked) {
+                isSame = false;
+                break;
+              }
+            }
+            if (!isSame) break;
+          }
+        }
         setCachedMaterials(targetId, res.modules);
         if (!isSame) {
           state.groupedMaterials = res.modules;
@@ -4217,6 +4278,18 @@ async function loadCourseMaterialsGrouped(courseId, forceRefresh = false) {
 function renderGroupedMaterials(modules) {
   const container = document.getElementById('grouped-modules-container');
   container.innerHTML = '';
+  container._groups = [];
+
+  // コンテナ単位のイベントデリゲーション（カードごとの大量のイベントリスナー登録を排除してメモリと初期描画時間を削減）
+  if (!container._delegatedClickBound) {
+    container._delegatedClickBound = true;
+    container.addEventListener('click', (e) => {
+      const card = e.target.closest('.module-file-card');
+      if (card && typeof card._onCardClick === 'function') {
+        card._onCardClick(e);
+      }
+    });
+  }
 
   if (modules.length === 0) {
     container.innerHTML = `
@@ -4239,6 +4312,9 @@ function renderGroupedMaterials(modules) {
   modules.forEach(m => {
     const group = document.createElement('div');
     group.className = 'module-group';
+    group._titleLower = String(m.name || '').toLowerCase();
+    group._cards = [];
+    container._groups.push(group);
 
     const fileItems = [];
     const videoItems = [];
@@ -4359,7 +4435,7 @@ function renderGroupedMaterials(modules) {
       card.className = `module-file-card${isLockedItem ? ' is-locked-item' : ''}`;
 
       const extUrl = it.externalUrl || it.url || it.htmlUrl;
-      const ytId = isExternal ? utils.extractYouTubeVideoId(extUrl) : null;
+      const ytId = utils.extractYouTubeVideoId(extUrl);
 
       // アイコンの選定
       let iconHtml = '';
@@ -4455,7 +4531,7 @@ function renderGroupedMaterials(modules) {
       } else if (isPage) {
         metaHtml = `<span>ノート</span>`;
       } else if (ytId) {
-        metaHtml = `<span>YouTube</span>`;
+        metaHtml = `<span>動画</span>`;
       } else if (isFile) {
         const ext = isPdf ? 'PDF' : utils.getFileExt(it.filename || it.displayName || title, it.contentType, isPdf);
         metaHtml = `<span>${ext}${it.size ? ` ・ ${utils.formatBytes(it.size)}` : ''}</span>`;
@@ -4552,6 +4628,10 @@ function renderGroupedMaterials(modules) {
         `;
       }
 
+      if (ytId) {
+        card.dataset.searchExtra = 'youtube video 動画';
+      }
+
       card.innerHTML = `
         <div class="module-file-left">
           <div class="module-file-icon ${iconClass}">
@@ -4571,8 +4651,13 @@ function renderGroupedMaterials(modules) {
         </div>
       `;
 
-      // カード全体のクリックイベント
-      card.addEventListener('click', (e) => {
+      // 検索用文字列を事前計算してインメモリ保持（キー入力時のDOM再走査を排除）
+      const plainMeta = metaHtml.replace(/<[^>]+>/g, ' ');
+      card._searchStr = `${title} ${plainMeta} ${card.dataset.searchExtra || ''}`.toLowerCase();
+      group._cards.push(card);
+
+      // カード全体のクリックハンドラ（コンテナの単一リスナーからイベント委譲で呼び出し）
+      card._onCardClick = (e) => {
         // 単体ファイルの「保存」ボタンをクリックした時は直接ダウンロードフォルダ保存
         const fileDirectSaveBtn = e.target.closest('.btn-file-direct-save');
         if (fileDirectSaveBtn) {
@@ -4696,7 +4781,7 @@ function renderGroupedMaterials(modules) {
         } else if (isExternal && (it.externalUrl || it.url || it.htmlUrl)) {
           utils.openExternalUrl(it.externalUrl || it.url || it.htmlUrl);
         }
-      });
+      };
 
       grid.appendChild(card);
     });
@@ -6220,8 +6305,151 @@ function setupCommandPalette() {
   const resultsList = document.getElementById('palette-results-list');
   let selectedIndex = 0;
   let currentItems = [];
+  let paletteIndex = [];
+
+  // ひらがな・カタカナ正規化用の簡易ヘルパー
+  const normalizeKana = (str) => {
+    if (!str) return '';
+    return String(str).normalize('NFKC').toLowerCase()
+      .replace(/[\u30a1-\u30f6]/g, m => String.fromCharCode(m.charCodeAt(0) - 0x60));
+  };
+
+  // パレット起動時に全キャッシュ済み科目・課題・お知らせの検索インデックスを1度だけ構築（キー入力ごとのNFKC正規化を排除）
+  function buildPaletteIndex() {
+    const items = [];
+    const courseNameById = new Map();
+    (state.courses || []).forEach(c => {
+      courseNameById.set(String(c.id), c.cleanName || c.name || '');
+    });
+
+    // 1. 講義資料（現在選択中の科目＋state.materialsCache 内の全キャッシュ済み科目を横断検索）
+    const courseModulesMap = new Map();
+    if (state.materialsCourseId && Array.isArray(state.groupedMaterials) && state.groupedMaterials.length > 0) {
+      courseModulesMap.set(String(state.materialsCourseId), state.groupedMaterials);
+    }
+    if (state.materialsCache instanceof Map) {
+      for (const [cid, entry] of state.materialsCache.entries()) {
+        const mods = (entry && entry.data) ? entry.data : entry;
+        if (Array.isArray(mods) && !courseModulesMap.has(String(cid))) {
+          courseModulesMap.set(String(cid), mods);
+        }
+      }
+    }
+
+    for (const [cid, mods] of courseModulesMap.entries()) {
+      const cName = courseNameById.get(String(cid)) || (String(cid) === String(state.materialsCourseId) ? getSelectedCourseName() : '');
+      mods.forEach(m => {
+        (m.items || []).forEach(it => {
+          const title = it.displayName || it.title || '';
+          const extUrl = it.externalUrl || it.url || it.htmlUrl;
+          const ytId = utils.extractYouTubeVideoId(extUrl);
+          const isVideo = Boolean(ytId);
+          const isFile = it.type === 'File';
+          const isPdf = isFile && title.toLowerCase().endsWith('.pdf');
+          const isPage = it.type === 'Page';
+
+          let type = '資料';
+          let typeColor = 'background: rgba(16, 185, 129, 0.16); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.3);';
+
+          if (isPdf) {
+            type = 'PDF';
+            typeColor = 'background: rgba(244, 63, 94, 0.16); color: #fda4af; border: 1px solid rgba(244, 63, 94, 0.3);';
+          } else if (isVideo) {
+            type = '動画';
+            typeColor = 'background: rgba(239, 68, 68, 0.16); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.3);';
+          } else if (isPage) {
+            type = 'ノート';
+            typeColor = 'background: rgba(245, 158, 11, 0.16); color: #fcd34d; border: 1px solid rgba(245, 158, 11, 0.3);';
+          }
+
+          const rawSearch = `${title} ${m.name || ''} ${cName} ${isVideo ? '動画 video youtube' : ''}`;
+          items.push({
+            type,
+            badgeStyle: typeColor,
+            title,
+            subtitle: `${cName ? `${cName} • ` : ''}${m.name || 'モジュール'}`,
+            normSearch: normalizeKana(rawSearch),
+            action: () => {
+              closePalette();
+              const targetCourseId = it.courseId || cid;
+              const fileCat = isFile ? utils.classifyFile(title, it.contentType) : 'unknown';
+              if (isFile && utils.isPreviewableCategory(fileCat) && it.id) {
+                openPdfPreviewModal(`/api/files/download?id=${it.id}&courseId=${targetCourseId}&inline=true&name=${encodeURIComponent(title)}`, title, it.id, targetCourseId);
+              } else if (isVideo) {
+                openYouTubeModal(ytId, title, extUrl);
+              } else if (isPage && it.pageUrl) {
+                openPageModal(targetCourseId, it.pageUrl, title, it);
+              } else if (isFile) {
+                downloadSingleFile({
+                  id: it.id,
+                  url: it.url,
+                  name: title,
+                  courseId: targetCourseId
+                });
+              }
+            }
+          });
+        });
+      });
+    }
+
+    // 2. お知らせ
+    if (Array.isArray(state.announcements)) {
+      state.announcements.forEach(a => {
+        items.push({
+          type: 'お知らせ',
+          badgeStyle: 'background: rgba(168, 85, 247, 0.16); color: #d8b4fe; border: 1px solid rgba(168, 85, 247, 0.3);',
+          title: a.title,
+          subtitle: `${a.author || '教員'} • ${utils.formatDate(a.postedAt)}`,
+          normSearch: normalizeKana(`${a.title || ''} ${a.author || ''} ${utils.stripHtml(a.message || '')}`),
+          action: () => {
+            closePalette();
+            switchView('announcements');
+          }
+        });
+      });
+    }
+
+    // 3. 課題アイテム
+    (state.allAssignments || []).forEach(a => {
+      items.push({
+        type: '課題',
+        badgeStyle: 'background: rgba(99, 102, 241, 0.16); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.3);',
+        title: a.name,
+        subtitle: `${a.courseName || ''} • 締切: ${utils.formatDate(a.dueAt)}`,
+        normSearch: normalizeKana(`${a.name || ''} ${a.courseName || ''} ${a.cleanCourseName || ''}`),
+        action: () => {
+          closePalette();
+          openAssignmentModal(a);
+        }
+      });
+    });
+
+    // 4. 科目アイテム
+    (state.courses || []).forEach(c => {
+      items.push({
+        type: '科目',
+        badgeStyle: 'background: rgba(6, 182, 212, 0.16); color: #67e8f9; border: 1px solid rgba(6, 182, 212, 0.3);',
+        title: `${c.cleanName || c.name}`,
+        subtitle: `${c.quarter ? `[${c.quarter}] ` : ''}${c.courseCode || '履修科目'} • 講義資料を開く`,
+        normSearch: normalizeKana(`${c.name || ''} ${c.cleanName || ''} ${c.courseCode || ''}`),
+        action: () => {
+          closePalette();
+          state.materialsCourseId = c.id;
+          const matSelect = document.getElementById('material-course-select');
+          if (matSelect) matSelect.value = c.id;
+          updateMaterialsCourseHeader(c.id);
+          switchView('materials');
+          loadCourseMaterialsGrouped(c.id, false);
+        }
+      });
+    });
+
+    paletteIndex = items;
+  }
 
   function openPalette() {
+    buildPaletteIndex();
     overlay.classList.add('open');
     searchInput.value = '';
     searchInput.focus();
@@ -6285,7 +6513,7 @@ function setupCommandPalette() {
 
   const debouncedRenderPalette = debounce((q) => {
     renderPaletteResults(q);
-  }, 100);
+  }, 60);
 
   searchInput.addEventListener('input', (e) => {
     selectedIndex = 0;
@@ -6294,136 +6522,10 @@ function setupCommandPalette() {
 
   function renderPaletteResults(rawQuery) {
     resultsList.innerHTML = '';
-    currentItems = [];
-
-    const query = (rawQuery || '').toLowerCase().trim();
-    // ひらがな・カタカナ正規化用の簡易ヘルパー
-    const normalizeKana = (str) => {
-      if (!str) return '';
-      return str.normalize('NFKC').toLowerCase()
-        .replace(/[\u30a1-\u30f6]/g, m => String.fromCharCode(m.charCodeAt(0) - 0x60));
-    };
-    const normQuery = normalizeKana(query);
-
-    const isMatch = (text) => {
-      if (!query) return true;
-      if (!text) return false;
-      const tLower = text.toLowerCase();
-      if (tLower.includes(query)) return true;
-      const tNorm = normalizeKana(text);
-      return tNorm.includes(normQuery);
-    };
-
-    // 1. 講義資料（PDF・スライド・配布ファイル・講義ノート・YouTube動画）
-    if (Array.isArray(state.groupedMaterials)) {
-      const activeCourseName = getSelectedCourseName();
-      state.groupedMaterials.forEach(m => {
-        (m.items || []).forEach(it => {
-          const title = it.displayName || it.title || '';
-          if (isMatch(title) || isMatch(m.name) || isMatch(activeCourseName)) {
-            const isFile = it.type === 'File';
-            const isPdf = isFile && title.toLowerCase().endsWith('.pdf');
-            const isPage = it.type === 'Page';
-            const isVideo = it.type === 'ExternalUrl' && utils.extractYouTubeVideoId(it.url || it.htmlUrl);
-
-            let type = '資料';
-            let typeColor = 'background: rgba(16, 185, 129, 0.16); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.3);';
-
-            if (isPdf) {
-              type = 'PDF';
-              typeColor = 'background: rgba(244, 63, 94, 0.16); color: #fda4af; border: 1px solid rgba(244, 63, 94, 0.3);';
-            } else if (isVideo) {
-              type = '動画';
-              typeColor = 'background: rgba(239, 68, 68, 0.16); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.3);';
-            } else if (isPage) {
-              type = 'ノート';
-              typeColor = 'background: rgba(245, 158, 11, 0.16); color: #fcd34d; border: 1px solid rgba(245, 158, 11, 0.3);';
-            }
-
-            currentItems.push({
-              type,
-              badgeStyle: typeColor,
-              title: title,
-              subtitle: `${activeCourseName ? `${activeCourseName} • ` : ''}${m.name || 'モジュール'}`,
-              action: () => {
-                closePalette();
-                const fileCat = isFile ? utils.classifyFile(title, it.contentType) : 'unknown';
-                if (isFile && utils.isPreviewableCategory(fileCat) && it.id) {
-                  openPdfPreviewModal(`/api/files/download?id=${it.id}&inline=true&name=${encodeURIComponent(title)}`, title, it.id, it.courseId || state.materialsCourseId);
-                } else if (isVideo) {
-                  const ytId = utils.extractYouTubeVideoId(it.url || it.htmlUrl);
-                  openYouTubeModal(ytId, title, it.url || it.htmlUrl);
-                } else if (isPage && it.pageUrl) {
-                  openPageModal(it.courseId || state.materialsCourseId, it.pageUrl, title, it);
-                } else if (isFile) {
-                  downloadSingleFile({
-                    id: it.id,
-                    url: it.url,
-                    name: title,
-                    courseId: it.courseId || state.materialsCourseId
-                  });
-                }
-              }
-            });
-          }
-        });
-      });
-    }
-
-    // 2. お知らせ
-    if (Array.isArray(state.announcements)) {
-      state.announcements.forEach(a => {
-        if (isMatch(a.title) || isMatch(a.message) || isMatch(a.author)) {
-          currentItems.push({
-            type: 'お知らせ',
-            badgeStyle: 'background: rgba(168, 85, 247, 0.16); color: #d8b4fe; border: 1px solid rgba(168, 85, 247, 0.3);',
-            title: a.title,
-            subtitle: `${a.author || '教員'} • ${utils.formatDate(a.postedAt)}`,
-            action: () => {
-              closePalette();
-              switchView('announcements');
-            }
-          });
-        }
-      });
-    }
-
-    // 3. 課題アイテム
-    state.allAssignments.forEach(a => {
-      if (isMatch(a.name) || isMatch(a.courseName) || isMatch(a.description)) {
-        currentItems.push({
-          type: '課題',
-          badgeStyle: 'background: rgba(99, 102, 241, 0.16); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.3);',
-          title: a.name,
-          subtitle: `${a.courseName || ''} • 締切: ${utils.formatDate(a.dueAt)}`,
-          action: () => {
-            closePalette();
-            openAssignmentModal(a);
-          }
-        });
-      }
-    });
-
-    // 4. 科目アイテム
-    state.courses.forEach(c => {
-      if (isMatch(c.name) || isMatch(c.cleanName) || isMatch(c.courseCode)) {
-        currentItems.push({
-          type: '科目',
-          badgeStyle: 'background: rgba(6, 182, 212, 0.16); color: #67e8f9; border: 1px solid rgba(6, 182, 212, 0.3);',
-          title: `${c.cleanName || c.name}`,
-          subtitle: `${c.quarter ? `[${c.quarter}] ` : ''}${c.courseCode || '履修科目'} • 講義資料を開く`,
-          action: () => {
-            closePalette();
-            state.materialsCourseId = c.id;
-            const matSelect = document.getElementById('material-course-select');
-            if (matSelect) matSelect.value = c.id;
-            updateMaterialsCourseHeader(c.id);
-            switchView('materials');
-            loadCourseMaterialsGrouped(c.id, false);
-          }
-        });
-      }
-    });
+    const normQuery = normalizeKana((rawQuery || '').trim());
+    currentItems = !normQuery
+      ? paletteIndex.slice(0, 16)
+      : paletteIndex.filter(item => item.normSearch.includes(normQuery)).slice(0, 16);
 
     if (currentItems.length === 0) {
       resultsList.innerHTML = '<div style="color: var(--text-muted); padding: 24px; text-align: center; font-size: 13px;">該当するPDF資料、課題、お知らせ、科目が見つかりません</div>';

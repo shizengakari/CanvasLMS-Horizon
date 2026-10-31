@@ -45,6 +45,15 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // ローカルループバック環境では毎回のレスポンスcloneとディスク書き込み(cache.put)を省き、I/Oオーバーヘッドを削減
+  const isLocalhost = url.hostname === '127.0.0.1' || url.hostname === 'localhost';
+  if (isLocalhost) {
+    event.respondWith(
+      fetch(event.request).catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
   // 静的ファイルはネットワーク優先、オフライン時はキャッシュ
   event.respondWith(
     fetch(event.request)

@@ -20,11 +20,19 @@ if (!fs.existsSync(userDir)) {
 const CONFIG_PATH = path.join(userDir, 'config.json');
 const FALLBACK_CONFIG_PATH = path.join(__dirname, '..', 'config.json');
 
+// メモリキャッシュ（API呼び出しごとの同期ディスクI/OとJSONパースを回避）
+let cachedConfig = null;
+
 /**
  * 現在の設定を読み込みます。
+ * @param {boolean} [forceReload=false] キャッシュを無視してディスクから再読み込みするか
  * @returns {object} アプリケーション設定オブジェクト
  */
-function loadConfig() {
+function loadConfig(forceReload = false) {
+  if (cachedConfig && !forceReload) {
+    return { ...cachedConfig };
+  }
+
   let config = {
     baseUrl: '',
     apiToken: '',
@@ -81,7 +89,8 @@ function loadConfig() {
     config.apiToken = process.env.CANVAS_API_TOKEN;
   }
 
-  return config;
+  cachedConfig = config;
+  return { ...cachedConfig };
 }
 
 /**
@@ -105,6 +114,7 @@ function saveConfig(newConfig) {
       merged.batteryMode = merged.batterySaver ? 'on' : 'auto';
     }
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2), 'utf-8');
+    cachedConfig = { ...merged };
     return true;
   } catch (err) {
     console.error('設定の保存に失敗しました:', err.message);

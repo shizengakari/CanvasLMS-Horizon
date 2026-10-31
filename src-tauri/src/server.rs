@@ -16,13 +16,13 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path as StdPath, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
-pub const APP_VERSION: &str = "1.4.6";
+pub const APP_VERSION: &str = "1.4.7";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DownloadJob {
@@ -72,7 +72,10 @@ impl AppState {
     pub fn new() -> Self {
         let pdf_cache_dir = get_config_dir().join("pdf_cache");
         let _ = fs::create_dir_all(&pdf_cache_dir);
-        purge_invalid_pdf_cache(&pdf_cache_dir);
+        let dir_for_cleanup = pdf_cache_dir.clone();
+        std::thread::spawn(move || {
+            purge_invalid_pdf_cache(&dir_for_cleanup);
+        });
 
         Self {
             canvas: CanvasService::new(),
@@ -245,9 +248,19 @@ pub fn mime_to_ext(mime: &str) -> Option<&'static str> {
     }
 }
 
+static RE_FILENAME_STAR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)filename\*\s*=\s*(?:UTF-8|utf-8)?''([^;\r\n]+)").unwrap());
+static RE_FILENAME_QUOTED: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)filename\s*=\s*"([^"]+)""#).unwrap());
+static RE_DOUBLE_PDF_EXT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\.(docx?|docs|docm|dotx|dotm|xlsx?|xlsm|xlsb|pptx?|pptm|ppsx|odt|ods|odp|pages|numbers|key|rtf|zip|7z|rar|tar|gz|tgz|bz2|xz|csv|tsv|txt|log|md|json|ipynb|xml|html?|css|js|ts|jsx|tsx|py|java|c|cpp|h|hpp|cs|go|rs|rb|php|sh|bat|ps1|sql|yaml|yml|toml|ini|r|tex|bib|png|jpe?g|gif|webp|svg|bmp|ico|mp4|m4v|webm|mov|mkv|avi|mp3|wav|m4a|ogg|flac|dwg|dxf|stl|obj|fbx|blend|psd|ai|eps|indd|fig|sketch|sqlite3?|db|mdb|accdb|mat|sav|dta|rds|rdata|parquet|feather|arrow|h5|hdf5|nc)\.pdf$",
+    )
+    .unwrap()
+});
+
 pub fn extract_filename_from_content_disposition(disposition: &str) -> Option<String> {
-    let star_re = Regex::new(r"(?i)filename\*\s*=\s*(?:UTF-8|utf-8)?''([^;\r\n]+)").ok()?;
-    if let Some(caps) = star_re.captures(disposition) {
+    if let Some(caps) = RE_FILENAME_STAR.captures(disposition) {
         if let Some(m) = caps.get(1) {
             let raw = m.as_str().trim().trim_matches(|c| c == '"' || c == '\'');
             if let Ok(dec) = urlencoding::decode(raw) {
@@ -255,8 +268,7 @@ pub fn extract_filename_from_content_disposition(disposition: &str) -> Option<St
             }
         }
     }
-    let quoted_re = Regex::new(r#"(?i)filename\s*=\s*"([^"]+)""#).ok()?;
-    if let Some(caps) = quoted_re.captures(disposition) {
+    if let Some(caps) = RE_FILENAME_QUOTED.captures(disposition) {
         if let Some(m) = caps.get(1) {
             let raw = m.as_str().trim();
             return Some(
@@ -270,13 +282,9 @@ pub fn extract_filename_from_content_disposition(disposition: &str) -> Option<St
 }
 
 pub fn strip_double_pdf_ext(name: &str) -> String {
-    let re = Regex::new(
-    r"(?i)\.(docx?|docs|docm|dotx|dotm|xlsx?|xlsm|xlsb|pptx?|pptm|ppsx|odt|ods|odp|pages|numbers|key|rtf|zip|7z|rar|tar|gz|tgz|bz2|xz|csv|tsv|txt|log|md|json|ipynb|xml|html?|css|js|ts|jsx|tsx|py|java|c|cpp|h|hpp|cs|go|rs|rb|php|sh|bat|ps1|sql|yaml|yml|toml|ini|r|tex|bib|png|jpe?g|gif|webp|svg|bmp|ico|mp4|m4v|webm|mov|mkv|avi|mp3|wav|m4a|ogg|flac|dwg|dxf|stl|obj|fbx|blend|psd|ai|eps|indd|fig|sketch|sqlite3?|db|mdb|accdb|mat|sav|dta|rds|rdata|parquet|feather|arrow|h5|hdf5|nc)\.pdf$",
-  )
-  .unwrap();
     let mut result = name.to_string();
     for _ in 0..3 {
-        let next = re.replace(&result, ".$1").into_owned();
+        let next = RE_DOUBLE_PDF_EXT.replace(&result, ".$1").into_owned();
         if next == result {
             break;
         }

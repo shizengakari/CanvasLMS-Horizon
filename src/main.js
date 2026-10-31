@@ -150,6 +150,7 @@ if (!gotTheLock) {
         }
       });
 
+      await serverBootPromise;
       const targetUrl = `http://localhost:${actualPort}`;
       mainWindow.loadURL(targetUrl);
 
@@ -558,7 +559,6 @@ del "${pendingAsarUpdate.pendingFile}" >nul 2>&1\r
 
   app.whenReady().then(async () => {
     try {
-      await serverBootPromise;
       await createWindow();
     } catch (err) {
       console.error('Failed to start server:', err);

@@ -5,6 +5,9 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+
+static CACHED_CONFIG: LazyLock<Mutex<Option<AppConfig>>> = LazyLock::new(|| Mutex::new(None));
 
 const OFFICIAL_REPO: &str = "shizengakari/CanvasLMS-Horizon";
 const LEGACY_REPO: &str = "shize-tech/CanvasLMS";
@@ -240,6 +243,12 @@ pub fn load_config_from_path(path: &Path) -> AppConfig {
 }
 
 pub fn load_config() -> AppConfig {
+    if let Ok(guard) = CACHED_CONFIG.lock() {
+        if let Some(ref cached) = *guard {
+            return cached.clone();
+        }
+    }
+
     let config_path = get_config_path();
     let mut cfg = load_config_from_path(&config_path);
     if cfg.base_url.is_empty() || cfg.api_token.is_empty() {
@@ -266,6 +275,9 @@ pub fn load_config() -> AppConfig {
             }
         }
     }
+    if let Ok(mut guard) = CACHED_CONFIG.lock() {
+        *guard = Some(cfg.clone());
+    }
     cfg
 }
 
@@ -278,6 +290,9 @@ pub fn save_config_to_path(config: &AppConfig, path: &Path) -> Result<(), std::i
     let json = serde_json::to_string_pretty(&to_save)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     fs::write(path, json)?;
+    if let Ok(mut guard) = CACHED_CONFIG.lock() {
+        *guard = Some(to_save);
+    }
     Ok(())
 }
 

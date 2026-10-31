@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-// 並行リクエストキュー（レート制限および同時接続過多の防止）
+// 優先度付き並行リクエストキュー（レート制限防止＋ユーザー操作の優先実行でHead-of-Lineブロッキングを解消）
 class RequestQueue {
   constructor(concurrency = 4) {
     this.concurrency = concurrency;
@@ -14,9 +14,19 @@ class RequestQueue {
     this.queue = [];
   }
 
-  add(fn) {
+  add(fn, priority = 1) {
     return new Promise((resolve, reject) => {
-      this.queue.push({ fn, resolve, reject });
+      const item = { fn, resolve, reject, priority };
+      if (priority > 0 && this.queue.length > 0) {
+        const idx = this.queue.findIndex(q => q.priority < priority);
+        if (idx !== -1) {
+          this.queue.splice(idx, 0, item);
+        } else {
+          this.queue.push(item);
+        }
+      } else {
+        this.queue.push(item);
+      }
       this.next();
     });
   }
@@ -148,6 +158,7 @@ class CanvasService {
     this.MATERIALS_CACHE_TTL = 30 * 60 * 1000; // 30分（講義資料モジュール）
     this.queue = new RequestQueue(4); // Canvas APIへの同時リクエスト数を4に制御して安定性を最大化
     this.inflightRequests = new Map(); // 重複GETリクエストのデデュープ
+    this.filesForbiddenCourses = new Set(); // /files API が 403/401 を返すコースのネガティブキャッシュ
     this._saveCacheTimer = null;
 
     const userDir = path.join(os.homedir(), 'AppData', 'Roaming', 'Canvas Horizon');
@@ -292,6 +303,9 @@ class CanvasService {
   clearAllCache(keepProfile = true) {
     if (this.pendingMaterialsPromises) {
       this.pendingMaterialsPromises.clear();
+    }
+    if (this.filesForbiddenCourses) {
+      this.filesForbiddenCourses.clear();
     }
     const profile = keepProfile ? this.cache.profile : null;
     const submittedOverrides = keepProfile && this.cache.submittedOverrides
@@ -442,19 +456,22 @@ class CanvasService {
    * タイムアウト・自動リトライ・レート制限対策を備えたHTTPリクエスト
    */
   async request(endpoint, options = {}, retries = 3) {
+    const priority = options.priority !== undefined ? options.priority : 1;
+    const fetchOptions = { ...options };
+    delete fetchOptions.priority;
+
     return this.queue.add(async () => {
+      const baseUrl = this.getBaseUrl();
+      const url = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`;
+      const headers = { ...this.getHeaders(), ...(fetchOptions.headers || {}) };
       let lastErr = null;
       for (let attempt = 0; attempt <= retries; attempt++) {
-        const baseUrl = this.getBaseUrl();
-        const url = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`;
-        const headers = { ...this.getHeaders(), ...(options.headers || {}) };
-
         try {
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 20000); // 20秒タイムアウト
 
           const res = await fetch(url, {
-            ...options,
+            ...fetchOptions,
             headers,
             signal: controller.signal
           });
@@ -645,7 +662,7 @@ class CanvasService {
   }
 
   // 課題一覧（提出状況・添付ファイル含む）
-  async getAssignments(courseId, forceRefresh = false, includeOld = false) {
+  async getAssignments(courseId, forceRefresh = false, includeOld = false, priority = 1) {
     const cacheKey = String(courseId) + (includeOld ? '_all' : '_recent');
     const cached = this.cache.assignments.get(cacheKey);
     const now = Date.now();
@@ -657,15 +674,16 @@ class CanvasService {
 
     try {
       const assignments = await this.fetchJson(
-        `/api/v1/courses/${courseId}/assignments?include[]=submission&include[]=rubric_assessment&include[]=can_submit&per_page=100`
+        `/api/v1/courses/${courseId}/assignments?include[]=submission&include[]=rubric_assessment&include[]=can_submit&per_page=100`,
+        { priority }
       );
 
       const formatted = (Array.isArray(assignments) ? assignments : [])
         .filter(a => {
           // 締切から1週間以上経過した課題を除外
           if (!includeOld && a.due_at) {
-            const dueTime = new Date(a.due_at).getTime();
-            if (now - dueTime > ONE_WEEK_MS) {
+            const dueTime = Date.parse(a.due_at);
+            if (!isNaN(dueTime) && now - dueTime > ONE_WEEK_MS) {
               return false;
             }
           }
@@ -737,7 +755,7 @@ class CanvasService {
         if (!a.dueAt && !b.dueAt) return 0;
         if (!a.dueAt) return 1;
         if (!b.dueAt) return -1;
-        return new Date(a.dueAt) - new Date(b.dueAt);
+        return Date.parse(a.dueAt) - Date.parse(b.dueAt);
       });
 
       this.setLru(this.cache.assignments, cacheKey, { time: now, data: formatted });
@@ -764,22 +782,29 @@ class CanvasService {
     // 今学期のコースを優先して順次取得
     const sortedCourses = [...courses].sort((a, b) => (b.isCurrentQuarter ? 1 : 0) - (a.isCurrentQuarter ? 1 : 0));
 
-    const promises = sortedCourses.map(c => 
-      this.getAssignments(c.id, forceRefresh, false)
-        .then(assignments => assignments.map(a => ({
-          ...a,
-          courseName: c.name,
-          cleanCourseName: c.cleanName,
-          quarter: c.quarter,
-          isCurrentQuarter: c.isCurrentQuarter,
-          courseCode: c.courseCode
-        })))
-        .catch(err => {
+    // 同時実行数を4に制御し、優先度0（バックグラウンド）でフェッチすることでユーザー操作のブロッキングを防止
+    const results = new Array(sortedCourses.length);
+    let cursor = 0;
+    const workerCount = Math.min(4, sortedCourses.length);
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (cursor < sortedCourses.length) {
+        const idx = cursor++;
+        const c = sortedCourses[idx];
+        try {
+          const assignments = await this.getAssignments(c.id, forceRefresh, false, 0);
+          results[idx] = assignments.map(a => ({
+            ...a,
+            courseName: c.name,
+            cleanCourseName: c.cleanName,
+            quarter: c.quarter,
+            isCurrentQuarter: c.isCurrentQuarter,
+            courseCode: c.courseCode
+          }));
+        } catch (err) {
           console.error(`Failed to fetch assignments for course ${c.id}:`, err.message);
-          // 個別コースの前回キャッシュをフォールバックとして検索
           const cached = this.cache.assignments.get(String(c.id) + '_recent');
           if (cached && cached.data) {
-            return cached.data.map(a => ({
+            results[idx] = cached.data.map(a => ({
               ...a,
               courseName: c.name,
               cleanCourseName: c.cleanName,
@@ -787,19 +812,21 @@ class CanvasService {
               isCurrentQuarter: c.isCurrentQuarter,
               courseCode: c.courseCode
             }));
+          } else {
+            results[idx] = [];
           }
-          return [];
-        })
-    );
+        }
+      }
+    });
 
-    const results = await Promise.all(promises);
+    await Promise.all(workers);
     const all = results.flat();
 
     all.sort((a, b) => {
       if (!a.dueAt && !b.dueAt) return 0;
       if (!a.dueAt) return 1;
       if (!b.dueAt) return -1;
-      return new Date(a.dueAt) - new Date(b.dueAt);
+      return Date.parse(a.dueAt) - Date.parse(b.dueAt);
     });
 
     this.cache.allAssignments = all;
@@ -898,7 +925,7 @@ class CanvasService {
   }
 
   // コース内の全ファイル（PDF・スライド等）を統合して取得
-  async getCourseFiles(courseId, forceRefresh = false) {
+  async getCourseFiles(courseId, forceRefresh = false, preloadedModules = null) {
     const cacheKey = String(courseId);
     const cached = this.cache.files.get(cacheKey);
     const now = Date.now();
@@ -909,45 +936,52 @@ class CanvasService {
 
     const fileMap = new Map();
 
-    // 1. 直の files API を試す（権限がある場合）
-    try {
-      const files = await this.fetchJson(`/api/v1/courses/${courseId}/files?sort=updated_at&order=desc&per_page=100`);
-      if (Array.isArray(files)) {
-        files.forEach(f => {
-          fileMap.set(String(f.id), {
-            id: f.id,
-            displayName: f.display_name || f.filename,
-            filename: f.filename || f.display_name,
-            size: f.size,
-            contentType: f['content-type'] || f.content_type,
-            url: f.url || null,
-            createdAt: f.created_at,
-            updatedAt: f.updated_at,
-            isLocked: Boolean(
-              f.locked ||
-              f.locked_for_user ||
-              f.hidden ||
-              f.hidden_for_user ||
-              f.lock_info ||
-              (f.unlock_at && new Date(f.unlock_at) > new Date()) ||
-              (f.lock_info?.unlock_at && new Date(f.lock_info.unlock_at) > new Date()) ||
-              (f.lock_at && new Date(f.lock_at) <= new Date()) ||
-              (f.lock_info?.lock_at && new Date(f.lock_info.lock_at) <= new Date())
-            ),
-            lockedForUser: Boolean(f.locked_for_user || f.locked),
-            unlockAt: f.unlock_at || f.lock_info?.unlock_at || null,
-            lockExplanation: f.lock_explanation || f.lock_info?.lock_explanation || null,
-            source: 'files'
+    // 1. 直の files API を試す（権限がある場合。過去に403/401だったコースはスキップして高速化）
+    if (!this.filesForbiddenCourses || !this.filesForbiddenCourses.has(cacheKey)) {
+      try {
+        const files = await this.fetchJson(`/api/v1/courses/${courseId}/files?sort=updated_at&order=desc&per_page=100`);
+        if (Array.isArray(files)) {
+          files.forEach(f => {
+            fileMap.set(String(f.id), {
+              id: f.id,
+              displayName: f.display_name || f.filename,
+              filename: f.filename || f.display_name,
+              size: f.size,
+              contentType: f['content-type'] || f.content_type,
+              url: f.url || null,
+              createdAt: f.created_at,
+              updatedAt: f.updated_at,
+              isLocked: Boolean(
+                f.locked ||
+                f.locked_for_user ||
+                f.hidden ||
+                f.hidden_for_user ||
+                f.lock_info ||
+                (f.unlock_at && Date.parse(f.unlock_at) > now) ||
+                (f.lock_info?.unlock_at && Date.parse(f.lock_info.unlock_at) > now) ||
+                (f.lock_at && Date.parse(f.lock_at) <= now) ||
+                (f.lock_info?.lock_at && Date.parse(f.lock_info.lock_at) <= now)
+              ),
+              lockedForUser: Boolean(f.locked_for_user || f.locked),
+              unlockAt: f.unlock_at || f.lock_info?.unlock_at || null,
+              lockExplanation: f.lock_explanation || f.lock_info?.lock_explanation || null,
+              source: 'files'
+            });
           });
-        });
+        }
+      } catch (e) {
+        // 403/401 の場合はネガティブキャッシュして次回以降の無駄なリクエストを排除し、モジュールからファイルを集約
+        if (e && e.message && (e.message.includes('[403]') || e.message.includes('[401]'))) {
+          if (this.filesForbiddenCourses) this.filesForbiddenCourses.add(cacheKey);
+        }
       }
-    } catch (e) {
-      // 403 の場合はモジュールからファイルを集約
     }
 
     // 2. モジュールから 'File' タイプのアイテムを取得・高速マッピング
     // （大量の直列/バッチHTTPリクエストを完全排除し、瞬時の科目表示とバッテリー節約を実現）
-    const modules = await this.getModules(courseId, forceRefresh);
+    const modules = preloadedModules
+      ? await preloadedModules
+      : await this.getModules(courseId, forceRefresh);
     modules.forEach(m => {
       (m.items || []).forEach(it => {
         if (it.type === 'File' && it.contentId && !fileMap.has(String(it.contentId))) {
@@ -1001,9 +1035,10 @@ class CanvasService {
 
     const fetchPromise = (async () => {
       try {
+        const modulesPromise = this.getModules(courseId, forceRefresh);
         const [modules, files, assignments] = await Promise.all([
-          this.getModules(courseId, forceRefresh),
-          this.getCourseFiles(courseId, forceRefresh),
+          modulesPromise,
+          this.getCourseFiles(courseId, forceRefresh, modulesPromise),
           this.getAssignments(courseId, forceRefresh, true).catch(() => [])
         ]);
 
@@ -1132,7 +1167,8 @@ class CanvasService {
             itemId: it.id,
             title: it.title,
             type: 'ExternalUrl',
-            url: it.externalUrl, // 外部直接URL（YouTube動画など）
+            url: it.externalUrl || it.url, // 外部直接URL（YouTube動画など）
+            externalUrl: it.externalUrl || null,
             htmlUrl: it.htmlUrl,
             ...commonProps
           });
@@ -1143,6 +1179,7 @@ class CanvasService {
             title: it.title,
             type: it.type,
             url: it.externalUrl || it.url,
+            externalUrl: it.externalUrl || null,
             htmlUrl: it.htmlUrl,
             ...commonProps
           });
@@ -1399,14 +1436,19 @@ class CanvasService {
 
     console.log(`一括アップロード開始: 新規ファイル ${files.length} 件, 保持ファイル ${validRetainIds.length} 件 (コース ${courseId}, 課題 ${assignmentId})`);
 
-    // 新規ファイルの順次アップロード
-    const uploadedFiles = [];
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      console.log(`ファイルアップロード中 (${i + 1}/${files.length}): ${file.originalname}`);
-      const uploaded = await this.uploadSingleFileForSubmission(courseId, assignmentId, file);
-      uploadedFiles.push(uploaded);
-    }
+    // 新規ファイルの並列アップロード（最大3並列で順序を維持しつつ高速化）
+    const uploadedFiles = new Array(files.length);
+    let uploadCursor = 0;
+    const uploadConcurrency = Math.min(3, files.length);
+    const uploadWorkers = Array.from({ length: uploadConcurrency }, async () => {
+      while (uploadCursor < files.length) {
+        const i = uploadCursor++;
+        const file = files[i];
+        console.log(`ファイルアップロード中 (${i + 1}/${files.length}): ${file.originalname}`);
+        uploadedFiles[i] = await this.uploadSingleFileForSubmission(courseId, assignmentId, file);
+      }
+    });
+    await Promise.all(uploadWorkers);
 
     const newFileIds = uploadedFiles.map(f => f.id);
     // 前回提出のファイルIDと新規アップロードのファイルIDを結合
@@ -1438,7 +1480,8 @@ class CanvasService {
 
     const submissionData = await submitRes.json();
 
-    // 提出完了オーバーライドを記録（Canvasレプリカラグ対策）およびキャッシュ無効化
+    // 提出完了オーバーライドを記録（Canvasレプリカラグ対策）および対象コースのキャッシュ更新
+    // ※ allAssignments と groupedMaterials は recordSubmittedOverride 内でインプレース更新済みのため破棄しない
     this.recordSubmittedOverride(courseId, assignmentId, {
       ...(submissionData || {}),
       attachments: (Array.isArray(submissionData?.attachments) && submissionData.attachments.length > 0)
@@ -1448,8 +1491,6 @@ class CanvasService {
     this.cache.assignments.delete(String(courseId) + '_recent');
     this.cache.assignments.delete(String(courseId) + '_all');
     this.cache.assignments.delete(String(courseId));
-    this.cache.groupedMaterials.delete(String(courseId));
-    this.cache.allAssignments = null;
     this.saveDiskCacheDebounced();
 
     return {
@@ -1497,8 +1538,6 @@ class CanvasService {
     this.cache.assignments.delete(String(courseId) + '_recent');
     this.cache.assignments.delete(String(courseId) + '_all');
     this.cache.assignments.delete(String(courseId));
-    this.cache.groupedMaterials.delete(String(courseId));
-    this.cache.allAssignments = null;
     this.saveDiskCacheDebounced();
     return submissionData;
   }
@@ -1611,8 +1650,13 @@ class CanvasService {
         if (downloadUrl) {
           const res = await fetch(downloadUrl);
           if (res.ok) {
-            const buf = Buffer.from(await res.arrayBuffer());
-            archive.append(buf, { name: item.name || item.displayName || 'download' });
+            const entryName = item.name || item.displayName || 'download';
+            if (res.body && typeof Readable.fromWeb === 'function') {
+              archive.append(Readable.fromWeb(res.body), { name: entryName });
+            } else {
+              const buf = Buffer.from(await res.arrayBuffer());
+              archive.append(buf, { name: entryName });
+            }
           }
         }
       } catch (err) {

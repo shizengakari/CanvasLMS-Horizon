@@ -11,6 +11,9 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const zlib = require('zlib');
+const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
 const { spawn, exec } = require('child_process');
 const canvasService = require('./canvasService');
 const { loadConfig, saveConfig } = require('./config');
@@ -19,14 +22,17 @@ const app = express();
 const downloadJobs = new Map();
 const youtubeDownloads = downloadJobs; // 後方互換性のエイリアス
 
+let cachedYtdlCmd = null;
 function getYtdlCommand() {
+  if (cachedYtdlCmd) return cachedYtdlCmd;
   const candidates = [
-    'yt-dlp',
     path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python312', 'Scripts', 'yt-dlp.exe'),
     path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python311', 'Scripts', 'yt-dlp.exe'),
-    path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python310', 'Scripts', 'yt-dlp.exe')
+    path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python310', 'Scripts', 'yt-dlp.exe'),
+    'yt-dlp'
   ];
-  return candidates.find(candidate => candidate === 'yt-dlp' || fs.existsSync(candidate));
+  cachedYtdlCmd = candidates.find(candidate => candidate === 'yt-dlp' || fs.existsSync(candidate)) || 'yt-dlp';
+  return cachedYtdlCmd;
 }
 
 function publicDownloadJob(job) {
@@ -75,6 +81,28 @@ const upload = multer({
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// 大容量JSONレスポンスの高速Gzip圧縮ミドルウェア（IPC/ループバック転送量とパース負荷を削減）
+app.use((req, res, next) => {
+  const acceptEncoding = req.headers['accept-encoding'] || '';
+  if (!acceptEncoding.includes('gzip')) return next();
+  const origJson = res.json.bind(res);
+  res.json = function (body) {
+    try {
+      const jsonStr = JSON.stringify(body);
+      if (jsonStr && jsonStr.length > 2048 && !res.headersSent) {
+        const compressed = zlib.gzipSync(Buffer.from(jsonStr, 'utf-8'), { level: zlib.constants.Z_BEST_SPEED });
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('Vary', 'Accept-Encoding');
+        res.setHeader('Content-Length', String(compressed.length));
+        return res.send(compressed);
+      }
+    } catch (_) {}
+    return origJson(body);
+  };
+  next();
+});
 
 // 静的ファイルの提供（HTMLは即時反映、CSS/JS/画像/フォント等はキャッシュしてディスクI/OとCPU負荷を低減）
 app.use(express.static(path.join(__dirname, '..', 'public'), {
@@ -171,18 +199,24 @@ app.get('/api/dashboard/timeline', async (req, res) => {
   }
 });
 
-// 4.1 手動完了済み課題リストの永続化（再起動後も完全保持）
+// 4.1 手動完了済み課題リストの永続化（メモリキャッシュ併用で毎回の同期ディスクI/Oを排除）
 const MANUAL_COMPLETED_FILE = path.join(os.homedir(), 'AppData', 'Roaming', 'Canvas Horizon', 'manual_completed.json');
+let cachedManualCompleted = null;
 
 app.get('/api/assignments/manual-completed', (req, res) => {
   try {
+    if (Array.isArray(cachedManualCompleted)) {
+      return res.json({ success: true, completedIds: cachedManualCompleted });
+    }
     if (fs.existsSync(MANUAL_COMPLETED_FILE)) {
       const data = JSON.parse(fs.readFileSync(MANUAL_COMPLETED_FILE, 'utf-8'));
-      return res.json({ success: true, completedIds: Array.isArray(data) ? data : [] });
+      cachedManualCompleted = Array.isArray(data) ? data : [];
+      return res.json({ success: true, completedIds: cachedManualCompleted });
     }
+    cachedManualCompleted = [];
     res.json({ success: true, completedIds: [] });
   } catch (e) {
-    res.json({ success: true, completedIds: [] });
+    res.json({ success: true, completedIds: cachedManualCompleted || [] });
   }
 });
 
@@ -190,11 +224,12 @@ app.post('/api/assignments/manual-completed', (req, res) => {
   try {
     const { completedIds } = req.body;
     if (Array.isArray(completedIds)) {
+      cachedManualCompleted = completedIds;
       const dir = path.dirname(MANUAL_COMPLETED_FILE);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      fs.writeFileSync(MANUAL_COMPLETED_FILE, JSON.stringify(completedIds), 'utf-8');
+      fs.promises.writeFile(MANUAL_COMPLETED_FILE, JSON.stringify(completedIds), 'utf-8').catch(() => {});
       return res.json({ success: true });
     }
     res.status(400).json({ success: false, error: 'Invalid data' });
@@ -839,7 +874,8 @@ function cleanOldPdfCaches() {
     console.warn('PDF cache cleanup warning:', err.message);
   }
 }
-cleanOldPdfCaches();
+// 起動時ブロッキングを避けるため非同期スケジュールで初回クリーンアップを実行
+setTimeout(cleanOldPdfCaches, 1500).unref?.();
 const pdfCleanTimer = setInterval(cleanOldPdfCaches, 6 * 60 * 60 * 1000);
 if (pdfCleanTimer.unref) pdfCleanTimer.unref();
 
@@ -1358,6 +1394,31 @@ app.post('/api/files/download-single', async (req, res) => {
           job.title = safeFileName;
           job.fileName = safeFileName;
         } catch (e) {}
+
+        // プレビュー等で既にローカルPDFキャッシュに完全なファイルが存在する場合はネットワーク通信ゼロで即時コピー保存
+        const cachedPdfPath = path.join(PDF_CACHE_DIR, `${fileId}.pdf`);
+        if (
+          (safeFileName.toLowerCase().endsWith('.pdf') || !path.extname(safeFileName)) &&
+          isValidPdfFile(cachedPdfPath)
+        ) {
+          if (!safeFileName.toLowerCase().endsWith('.pdf')) safeFileName += '.pdf';
+          let finalPath = path.join(downloadsDir, safeFileName);
+          let counter = 1;
+          const ext = path.extname(safeFileName);
+          const base = path.basename(safeFileName, ext);
+          while (fs.existsSync(finalPath)) {
+            finalPath = path.join(downloadsDir, `${base} (${counter})${ext}`);
+            counter++;
+          }
+          await fs.promises.copyFile(cachedPdfPath, finalPath);
+          job.status = 'completed';
+          job.progress = 100;
+          job.fileName = path.basename(finalPath);
+          job.fullPath = finalPath;
+          job.saveDir = downloadsDir;
+          job.message = `保存完了: ${path.basename(finalPath)}`;
+          return;
+        }
       }
 
       // 2. 相対URL（自前プロキシ /api/files/download など）を完全なURLに変換
@@ -1536,138 +1597,172 @@ app.post('/api/files/download-batch', async (req, res) => {
 
     registerDownloadJob(job);
 
-    // バックグラウンドで順次ダウンロード
+    // バックグラウンドで並列・ストリームダウンロード（最大3並列＋メモリ膨張防止）
     (async () => {
       const cfg = loadConfig();
       const canvasHost = getCanvasHost(cfg);
       const downloadErrors = [];
+      const hostHeader = req.get('host') || (`127.0.0.1:${currentPort || PORT}`);
+      const localOrigin = `${req.protocol || 'http'}://${hostHeader}`;
 
-      for (let i = 0; i < files.length; i++) {
-        if (job.status === 'cancelled') break;
-        const item = files[i];
-        const rawName = item.name || item.displayName || `file_${i + 1}`;
-        let safeFileName = normalizeDownloadFileName(rawName);
-        job.currentFileName = safeFileName;
-        job.message = `${i + 1}/${files.length} 件目を保存中: ${safeFileName}`;
+      let cursor = 0;
+      const workerCount = Math.min(3, files.length);
+      const workers = Array.from({ length: workerCount }, async () => {
+        while (cursor < files.length) {
+          if (job.status === 'cancelled') break;
+          const i = cursor++;
+          const item = files[i];
+          const rawName = item.name || item.displayName || `file_${i + 1}`;
+          let safeFileName = normalizeDownloadFileName(rawName);
+          job.currentFileName = safeFileName;
+          job.message = `${job.completedCount + 1}/${files.length} 件目を保存中: ${safeFileName}`;
 
-        try {
-          const hostHeader = req.get('host') || (`127.0.0.1:${currentPort || PORT}`);
-          const localOrigin = `${req.protocol || 'http'}://${hostHeader}`;
-          let downloadUrl = item.url || null;
-          let resolvedFileData = null;
+          try {
+            let downloadUrl = item.url || null;
+            let resolvedFileData = null;
 
-          // item.id がある場合は Canvas Files API から署名付きダウンロードURLと本来のファイル名・拡張子を解決
-          if (item.id) {
-            try {
-              resolvedFileData = await canvasService.resolveFileDownload(item.id, item.courseId);
-              if (resolvedFileData?.url) {
-                downloadUrl = resolvedFileData.url;
-              }
-              safeFileName = normalizeDownloadFileName(rawName, resolvedFileData);
-              job.currentFileName = safeFileName;
-            } catch (resolveErr) {}
-          }
-
-          if (downloadUrl && downloadUrl.startsWith('/')) {
-            try {
-              const parsedLocal = new URL(downloadUrl, localOrigin);
-              if (parsedLocal.searchParams.get('inline') === 'true') {
-                parsedLocal.searchParams.delete('inline');
-              }
-              downloadUrl = parsedLocal.toString();
-            } catch (e) {
-              downloadUrl = `${localOrigin}${downloadUrl}`;
-            }
-          }
-
-          // item.url が Canvas の内部APIエンドポイントの場合、詳細JSONから直接URLを取り出す
-          if (downloadUrl && downloadUrl.includes('/api/v1/')) {
-            try {
-              const fileData = await canvasService.fetchJson(downloadUrl);
-              if (fileData) {
-                resolvedFileData = resolvedFileData || fileData;
-                if (fileData.url) {
-                  downloadUrl = fileData.url;
+            // item.id がある場合は Canvas Files API から署名付きダウンロードURLと本来のファイル名・拡張子を解決
+            if (item.id) {
+              try {
+                resolvedFileData = await canvasService.resolveFileDownload(item.id, item.courseId);
+                if (resolvedFileData?.url) {
+                  downloadUrl = resolvedFileData.url;
                 }
                 safeFileName = normalizeDownloadFileName(rawName, resolvedFileData);
+                job.currentFileName = safeFileName;
+              } catch (resolveErr) {}
+
+              // 既にプレビューキャッシュ済みのPDFならネットワーク通信なしで即時ローカルコピー
+              const cachedPdfPath = path.join(PDF_CACHE_DIR, `${item.id}.pdf`);
+              if (
+                (safeFileName.toLowerCase().endsWith('.pdf') || !path.extname(safeFileName)) &&
+                isValidPdfFile(cachedPdfPath)
+              ) {
+                if (!safeFileName.toLowerCase().endsWith('.pdf')) safeFileName += '.pdf';
+                let finalPath = path.join(saveDir, safeFileName);
+                let counter = 1;
+                const ext = path.extname(safeFileName);
+                const base = path.basename(safeFileName, ext);
+                while (fs.existsSync(finalPath)) {
+                  finalPath = path.join(saveDir, `${base} (${counter})${ext}`);
+                  counter++;
+                }
+                await fs.promises.copyFile(cachedPdfPath, finalPath);
+                job.savedFiles.push(path.basename(finalPath));
+                job.completedCount++;
+                job.progress = Math.round((job.completedCount / job.totalCount) * 100);
+                job.message = `${job.completedCount}/${job.totalCount} 件保存完了`;
+                continue;
               }
-            } catch (apiErr) {
-              console.warn(`Could not resolve API URL for ${safeFileName}:`, apiErr.message);
             }
-          }
 
-          if (downloadUrl && !downloadUrl.startsWith(localOrigin)) {
-            downloadUrl = normalizeCanvasFileUrl(downloadUrl, cfg);
-          }
+            if (downloadUrl && downloadUrl.startsWith('/')) {
+              try {
+                const parsedLocal = new URL(downloadUrl, localOrigin);
+                if (parsedLocal.searchParams.get('inline') === 'true') {
+                  parsedLocal.searchParams.delete('inline');
+                }
+                downloadUrl = parsedLocal.toString();
+              } catch (e) {
+                downloadUrl = `${localOrigin}${downloadUrl}`;
+              }
+            }
 
-          // 最後のフォールバック（Canvasの直接ダウンロードURL構造）
-          if (!downloadUrl && item.id && cfg.baseUrl) {
-            const baseUrl = cfg.baseUrl.replace(/\/+$/, '');
-            downloadUrl = `${baseUrl}/files/${item.id}/download?download_frd=1`;
-          }
+            // item.url が Canvas の内部APIエンドポイントの場合、詳細JSONから直接URLを取り出す
+            if (downloadUrl && downloadUrl.includes('/api/v1/')) {
+              try {
+                const fileData = await canvasService.fetchJson(downloadUrl);
+                if (fileData) {
+                  resolvedFileData = resolvedFileData || fileData;
+                  if (fileData.url) {
+                    downloadUrl = fileData.url;
+                  }
+                  safeFileName = normalizeDownloadFileName(rawName, resolvedFileData);
+                }
+              } catch (apiErr) {
+                console.warn(`Could not resolve API URL for ${safeFileName}:`, apiErr.message);
+              }
+            }
 
-          if (!downloadUrl) throw new Error('ダウンロードURLの取得に失敗しました');
+            if (downloadUrl && !downloadUrl.startsWith(localOrigin)) {
+              downloadUrl = normalizeCanvasFileUrl(downloadUrl, cfg);
+            }
 
-          let urlHost = '';
-          try {
-            urlHost = new URL(downloadUrl).host;
-          } catch (e) {}
+            // 最後のフォールバック（Canvasの直接ダウンロードURL構造）
+            if (!downloadUrl && item.id && cfg.baseUrl) {
+              const baseUrl = cfg.baseUrl.replace(/\/+$/, '');
+              downloadUrl = `${baseUrl}/files/${item.id}/download?download_frd=1`;
+            }
 
-          const fetchHeaders = {};
-          // Canvas ドメイン宛てのリクエストのみ Bearer トークンを付与（S3等の外部ストレージへの誤送信を防ぐ）
-          if (urlHost && urlHost === canvasHost) {
-            fetchHeaders['Authorization'] = `Bearer ${cfg.apiToken}`;
-          }
+            if (!downloadUrl) throw new Error('ダウンロードURLの取得に失敗しました');
 
-          let fileRes = await fetch(downloadUrl, {
-            headers: fetchHeaders,
-            redirect: 'follow',
-            signal: AbortSignal.timeout(30000)
-          });
-
-          // Canvasホストで認証切れや失敗した場合、URLパラメータにaccess_tokenを付けて1回再試行
-          if (!fileRes.ok && urlHost === canvasHost) {
+            let urlHost = '';
             try {
-              const retryUrl = new URL(downloadUrl);
-              retryUrl.searchParams.set('access_token', cfg.apiToken);
-              fileRes = await fetch(retryUrl.toString(), {
-                redirect: 'follow',
-                signal: AbortSignal.timeout(30000)
-              });
-            } catch (retryErr) {}
+              urlHost = new URL(downloadUrl).host;
+            } catch (e) {}
+
+            const fetchHeaders = {};
+            // Canvas ドメイン宛てのリクエストのみ Bearer トークンを付与（S3等の外部ストレージへの誤送信を防ぐ）
+            if (urlHost && urlHost === canvasHost) {
+              fetchHeaders['Authorization'] = `Bearer ${cfg.apiToken}`;
+            }
+
+            let fileRes = await fetch(downloadUrl, {
+              headers: fetchHeaders,
+              redirect: 'follow',
+              signal: AbortSignal.timeout(30000)
+            });
+
+            // Canvasホストで認証切れや失敗した場合、URLパラメータにaccess_tokenを付けて1回再試行
+            if (!fileRes.ok && urlHost === canvasHost) {
+              try {
+                const retryUrl = new URL(downloadUrl);
+                retryUrl.searchParams.set('access_token', cfg.apiToken);
+                fileRes = await fetch(retryUrl.toString(), {
+                  redirect: 'follow',
+                  signal: AbortSignal.timeout(30000)
+                });
+              } catch (retryErr) {}
+            }
+
+            if (!fileRes.ok) throw new Error(`HTTP ${fileRes.status}`);
+
+            // HTML（Canvasログイン画面など）が返っていないか検知 & Content-Disposition から正確な拡張子を補完
+            const contentType = fileRes.headers.get('content-type') || '';
+            const respDisposition = fileRes.headers.get('content-disposition');
+            safeFileName = normalizeDownloadFileName(rawName, resolvedFileData, respDisposition, contentType);
+            if (contentType.includes('text/html') && !/\.html?$/i.test(safeFileName)) {
+              throw new Error('Canvasの認証またはファイルアクセス権限がありません (ログイン画面が返却されました)');
+            }
+
+            let finalPath = path.join(saveDir, safeFileName);
+            let counter = 1;
+            const ext = path.extname(safeFileName);
+            const base = path.basename(safeFileName, ext);
+            while (fs.existsSync(finalPath)) {
+              finalPath = path.join(saveDir, `${base} (${counter})${ext}`);
+              counter++;
+            }
+
+            if (fileRes.body && typeof Readable.fromWeb === 'function') {
+              await pipeline(Readable.fromWeb(fileRes.body), fs.createWriteStream(finalPath));
+            } else {
+              const buffer = Buffer.from(await fileRes.arrayBuffer());
+              await fs.promises.writeFile(finalPath, buffer);
+            }
+            job.savedFiles.push(path.basename(finalPath));
+          } catch (err) {
+            console.error(`Error saving ${safeFileName}:`, err.message);
+            downloadErrors.push(`${safeFileName}: ${err.message}`);
           }
 
-          if (!fileRes.ok) throw new Error(`HTTP ${fileRes.status}`);
-
-          // HTML（Canvasログイン画面など）が返っていないか検知 & Content-Disposition から正確な拡張子を補完
-          const contentType = fileRes.headers.get('content-type') || '';
-          const respDisposition = fileRes.headers.get('content-disposition');
-          safeFileName = normalizeDownloadFileName(rawName, resolvedFileData, respDisposition, contentType);
-          if (contentType.includes('text/html') && !/\.html?$/i.test(safeFileName)) {
-            throw new Error('Canvasの認証またはファイルアクセス権限がありません (ログイン画面が返却されました)');
-          }
-
-          let finalPath = path.join(saveDir, safeFileName);
-          let counter = 1;
-          const ext = path.extname(safeFileName);
-          const base = path.basename(safeFileName, ext);
-          while (fs.existsSync(finalPath)) {
-            finalPath = path.join(saveDir, `${base} (${counter})${ext}`);
-            counter++;
-          }
-
-          const buffer = Buffer.from(await fileRes.arrayBuffer());
-          await fs.promises.writeFile(finalPath, buffer);
-          job.savedFiles.push(path.basename(finalPath));
-        } catch (err) {
-          console.error(`Error saving ${safeFileName}:`, err.message);
-          downloadErrors.push(`${safeFileName}: ${err.message}`);
+          job.completedCount++;
+          job.progress = Math.round((job.completedCount / job.totalCount) * 100);
+          job.message = `${job.completedCount}/${job.totalCount} 件保存完了`;
         }
+      });
 
-        job.completedCount++;
-        job.progress = Math.round((job.completedCount / job.totalCount) * 100);
-        job.message = `${job.completedCount}/${job.totalCount} 件保存完了`;
-      }
+      await Promise.all(workers);
 
       if (job.status !== 'cancelled') {
         if (job.savedFiles.length === 0 && files.length > 0) {
@@ -1873,21 +1968,8 @@ app.post('/api/youtube/download-legacy', async (req, res) => {
   const safeName = (title || 'lecture_video').replace(/[\\/:*?"<>|]/g, '_');
   const outputPattern = path.join(downloadsDir, `${safeName}.%(ext)s`);
 
-  // yt-dlp の実行ファイルパスを解決
-  let ytdlCmd = 'yt-dlp';
-  const knownYtdlPaths = [
-    'yt-dlp',
-    path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python312', 'Scripts', 'yt-dlp.exe'),
-    path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python311', 'Scripts', 'yt-dlp.exe'),
-    path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python310', 'Scripts', 'yt-dlp.exe')
-  ];
-
-  for (const p of knownYtdlPaths) {
-    if (p === 'yt-dlp' || fs.existsSync(p)) {
-      ytdlCmd = p;
-      break;
-    }
-  }
+  // yt-dlp の実行ファイルパスを解決（キャッシュ済みパスを使用）
+  const ytdlCmd = getYtdlCommand();
 
   // フォーマット指定および保存先パスの解決
   const args = [
