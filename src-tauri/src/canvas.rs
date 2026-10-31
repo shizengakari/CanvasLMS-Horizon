@@ -138,16 +138,18 @@ impl CanvasService {
                 guard.profile = Some(p.clone());
             }
         }
-        if let Some(c) = parsed.get("courses") {
-            if c.is_array() {
-                guard.courses = Some(c.clone());
-                guard.courses_time = parsed
-                    .get("coursesTime")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
+        let is_same_app_version =
+            parsed.get("appVersion").and_then(|v| v.as_str()) == Some(crate::server::APP_VERSION);
+        if is_same_app_version && parsed.get("schemaVersion").and_then(|v| v.as_u64()) == Some(2) {
+            if let Some(c) = parsed.get("courses") {
+                if c.is_array() {
+                    guard.courses = Some(c.clone());
+                    guard.courses_time = parsed
+                        .get("coursesTime")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                }
             }
-        }
-        if parsed.get("schemaVersion").and_then(|v| v.as_u64()) == Some(2) {
             if let Some(all_a) = parsed.get("allAssignments") {
                 if all_a.is_array() {
                     guard.all_assignments = Some(all_a.clone());
@@ -197,6 +199,7 @@ impl CanvasService {
             };
             json!({
               "schemaVersion": 2,
+              "appVersion": crate::server::APP_VERSION,
               "profile": guard.profile,
               "courses": guard.courses,
               "coursesTime": guard.courses_time,

@@ -52,6 +52,25 @@ try {
       fs.writeFileSync(serverRsPath, updatedServer, 'utf8');
     }
   }
+  const indexHtmlPath = 'public/index.html';
+  if (fs.existsSync(indexHtmlPath)) {
+    const htmlRaw = fs.readFileSync(indexHtmlPath, 'utf8');
+    const updatedHtml = htmlRaw
+      .replace(/css\/style\.css\?v=[^"'\s>]+/g, `css/style.css?v=${version}`)
+      .replace(/js\/app\.js\?v=[^"'\s>]+/g, `js/app.js?v=${version}`)
+      .replace(/\/sw\.js(?:\?v=[^"'\s)]+)?/g, `/sw.js?v=${version}`);
+    if (updatedHtml !== htmlRaw) {
+      fs.writeFileSync(indexHtmlPath, updatedHtml, 'utf8');
+    }
+  }
+  const swJsPath = 'public/sw.js';
+  if (fs.existsSync(swJsPath)) {
+    const swRaw = fs.readFileSync(swJsPath, 'utf8');
+    const updatedSw = swRaw.replace(/const CACHE_NAME = 'canvas-horizon-v[^']*';/, `const CACHE_NAME = 'canvas-horizon-v${version}';`);
+    if (updatedSw !== swRaw) {
+      fs.writeFileSync(swJsPath, updatedSw, 'utf8');
+    }
+  }
 } catch (err) {
   console.warn('Warning syncing Rust version metadata:', err.message);
 }

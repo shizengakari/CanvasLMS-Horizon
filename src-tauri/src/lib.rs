@@ -492,6 +492,22 @@ async fn start_download_update(app: tauri::AppHandle) -> Value {
     start_download_update_impl(Some(&app)).await
 }
 
+pub fn cleanup_old_executables() {
+    std::thread::spawn(|| {
+        if let Ok(current_exe) = std::env::current_exe() {
+            let old_exe = current_exe.with_extension("exe.old");
+            for _ in 0..15 {
+                if !old_exe.exists() || fs::remove_file(&old_exe).is_ok() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        }
+        let update_dir = get_pending_update_dir();
+        let _ = fs::remove_file(update_dir.join("canvas-horizon.update.exe.tmp"));
+    });
+}
+
 pub fn quit_and_install_impl() -> bool {
     let ready_exe = PENDING_UPDATE
         .lock()
@@ -503,28 +519,81 @@ pub fn quit_and_install_impl() -> bool {
         unblock_windows_executable(&ready_exe);
 
         if let Ok(current_exe) = std::env::current_exe() {
+            let old_exe = current_exe.with_extension("exe.old");
+            let _ = fs::remove_file(&old_exe);
+
+            // 1. Windows NTFS 自己リネーム方式（ロック競合ゼロで実行中バイナリを退避し新バイナリを配置）
+            if fs::rename(&current_exe, &old_exe).is_ok() {
+                let placed = if fs::rename(&ready_exe, &current_exe).is_ok() {
+                    true
+                } else if fs::copy(&ready_exe, &current_exe).is_ok() {
+                    let _ = fs::remove_file(&ready_exe);
+                    true
+                } else {
+                    false
+                };
+
+                if placed && is_valid_pe_executable(&current_exe) {
+                    unblock_windows_executable(&current_exe);
+                    if std::process::Command::new(&current_exe).spawn().is_ok() {
+                        std::process::exit(0);
+                    }
+                }
+                // 万が一配置または起動に失敗した場合は元のバイナリを即座に復元
+                if !current_exe.exists() && old_exe.exists() {
+                    let _ = fs::rename(&old_exe, &current_exe);
+                }
+            }
+
+            // 2. フォールバック：cmd.exe の括弧ブロック内 goto バグを排除した堅牢な更新バッチ
             let update_dir = get_pending_update_dir();
             let bat_path = update_dir.join("apply-update.bat");
             let src_str = ready_exe.to_string_lossy();
             let dst_str = current_exe.to_string_lossy();
+            let old_str = old_exe.to_string_lossy();
 
             let bat_content = format!(
                 "@echo off\r\n\
-         chcp 65001 >nul\r\n\
-         ping 127.0.0.1 -n 3 >nul\r\n\
-         powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command \"Unblock-File -LiteralPath '{}' -ErrorAction SilentlyContinue\"\r\n\
-         :retry\r\n\
-         move /Y \"{}\" \"{}\" >nul 2>&1\r\n\
-         if errorlevel 1 (\r\n\
-           ping 127.0.0.1 -n 2 >nul\r\n\
-           goto retry\r\n\
-         )\r\n\
-         powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command \"Unblock-File -LiteralPath '{}' -ErrorAction SilentlyContinue\"\r\n\
-         start \"\" \"{}\"\r\n\
-         del \"%~f0\" >nul 2>&1\r\n",
+chcp 65001 >nul\r\n\
+ping 127.0.0.1 -n 2 >nul\r\n\
+powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command \"Unblock-File -LiteralPath '{}' -ErrorAction SilentlyContinue\"\r\n\
+set /a retries=0\r\n\
+:retry\r\n\
+del /F /Q \"{}\" >nul 2>&1\r\n\
+move /Y \"{}\" \"{}\" >nul 2>&1\r\n\
+move /Y \"{}\" \"{}\" >nul 2>&1\r\n\
+if not errorlevel 1 goto launch\r\n\
+copy /Y \"{}\" \"{}\" >nul 2>&1\r\n\
+if not errorlevel 1 goto launch\r\n\
+set /a retries+=1\r\n\
+if %retries% lss 30 goto wait_retry\r\n\
+goto restore\r\n\
+:wait_retry\r\n\
+ping 127.0.0.1 -n 2 >nul\r\n\
+goto retry\r\n\
+:restore\r\n\
+if not exist \"{}\" move /Y \"{}\" \"{}\" >nul 2>&1\r\n\
+goto end\r\n\
+:launch\r\n\
+del /F /Q \"{}\" >nul 2>&1\r\n\
+del /F /Q \"{}\" >nul 2>&1\r\n\
+powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command \"Unblock-File -LiteralPath '{}' -ErrorAction SilentlyContinue\"\r\n\
+start \"\" \"{}\"\r\n\
+:end\r\n\
+del \"%~f0\" >nul 2>&1\r\n",
                 src_str.replace('\'', "''"),
+                old_str,
+                dst_str,
+                old_str,
                 src_str,
                 dst_str,
+                src_str,
+                dst_str,
+                dst_str,
+                old_str,
+                dst_str,
+                src_str,
+                old_str,
                 dst_str.replace('\'', "''"),
                 dst_str
             );
@@ -554,7 +623,17 @@ fn quit_and_install(app: tauri::AppHandle) {
 }
 
 fn bind_available_listener() -> StdTcpListener {
-    for port in [3000u16, 39281u16, 0u16] {
+    // 再起動直後に旧プロセスのポート 3000 が解放されるのを少し待ってからバインドし、オリジン変化を防止
+    for attempt in 0..8 {
+        if let Ok(listener) = StdTcpListener::bind(("127.0.0.1", 3000u16)) {
+            let _ = listener.set_nonblocking(true);
+            return listener;
+        }
+        if attempt < 7 {
+            std::thread::sleep(Duration::from_millis(120));
+        }
+    }
+    for port in [39281u16, 0u16] {
         if let Ok(listener) = StdTcpListener::bind(("127.0.0.1", port)) {
             let _ = listener.set_nonblocking(true);
             return listener;
@@ -565,6 +644,7 @@ fn bind_available_listener() -> StdTcpListener {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    cleanup_old_executables();
     let std_listener = bind_available_listener();
     let port = std_listener.local_addr().map(|a| a.port()).unwrap_or(3000);
 

@@ -2,7 +2,7 @@
  * Canvas Horizon - Service Worker (PWA)
  */
 
-const CACHE_NAME = 'canvas-horizon-v1';
+const CACHE_NAME = 'canvas-horizon-v1.4.8';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -12,8 +12,11 @@ const STATIC_ASSETS = [
   '/icons/icon.png'
 ];
 
+const isLocalhostOrigin = self.location.hostname === '127.0.0.1' || self.location.hostname === 'localhost';
+
 self.addEventListener('install', (event) => {
   self.skipWaiting();
+  if (isLocalhostOrigin) return;
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(STATIC_ASSETS).catch((err) => {
@@ -28,7 +31,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) => {
       return Promise.all(
         keys.map((key) => {
-          if (key !== CACHE_NAME) {
+          if (isLocalhostOrigin || key !== CACHE_NAME) {
             return caches.delete(key);
           }
         })

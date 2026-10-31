@@ -104,16 +104,11 @@ app.use((req, res, next) => {
   next();
 });
 
-// 静的ファイルの提供（HTMLは即時反映、CSS/JS/画像/フォント等はキャッシュしてディスクI/OとCPU負荷を低減）
+// 静的ファイルの提供（ローカルループバック環境のため即時反映を最優先し、更新後の古いJS/CSSキャッシュ残りを完全防止）
 app.use(express.static(path.join(__dirname, '..', 'public'), {
   etag: true,
-  maxAge: '1h',
-  setHeaders: (res, filePath) => {
-    if (filePath.endsWith('.html') || filePath.endsWith('sw.js') || filePath.endsWith('manifest.json')) {
-      res.set('Cache-Control', 'no-cache, must-revalidate');
-    } else {
-      res.set('Cache-Control', 'public, max-age=3600');
-    }
+  setHeaders: (res) => {
+    res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
   }
 }));
 

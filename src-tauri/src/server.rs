@@ -22,7 +22,7 @@ use tokio::io::AsyncWriteExt;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
-pub const APP_VERSION: &str = "1.4.7";
+pub const APP_VERSION: &str = "1.4.8";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DownloadJob {
@@ -2392,6 +2392,17 @@ pub fn resolve_public_dir() -> PathBuf {
     PathBuf::from("public")
 }
 
+pub fn inject_version_into_html(html: &str) -> String {
+    static RE_CSS_VER: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"css/style\.css(?:\?v=[^&'\x22>\s]+)?").unwrap());
+    static RE_JS_VER: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"js/app\.js(?:\?v=[^&'\x22>\s]+)?").unwrap());
+    let css_target = format!("css/style.css?v={}", APP_VERSION);
+    let js_target = format!("js/app.js?v={}", APP_VERSION);
+    let s1 = RE_CSS_VER.replace_all(html, css_target.as_str());
+    RE_JS_VER.replace_all(&s1, js_target.as_str()).into_owned()
+}
+
 async fn serve_embedded_or_disk(uri: axum::http::Uri) -> Response {
     let raw_path = uri.path().trim_start_matches('/');
     let rel_path = if raw_path.is_empty() {
@@ -2409,15 +2420,26 @@ async fn serve_embedded_or_disk(uri: axum::http::Uri) -> Response {
                     .map(|s| format!(".{}", s.to_lowercase()))
                     .unwrap_or_default();
                 let mime = ext_to_mime(&ext).unwrap_or("application/octet-stream");
-                return (
-                    StatusCode::OK,
-                    [
-                        (header::CONTENT_TYPE, mime),
-                        (header::CACHE_CONTROL, "public, max-age=3600"),
-                    ],
-                    bytes,
-                )
-                    .into_response();
+                let out_bytes = if rel_path == "index.html" {
+                    if let Ok(html_str) = String::from_utf8(bytes) {
+                        inject_version_into_html(&html_str).into_bytes()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    bytes
+                };
+                if !out_bytes.is_empty() {
+                    return (
+                        StatusCode::OK,
+                        [
+                            (header::CONTENT_TYPE, mime),
+                            (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
+                        ],
+                        out_bytes,
+                    )
+                        .into_response();
+                }
             }
         }
     }
@@ -2425,15 +2447,18 @@ async fn serve_embedded_or_disk(uri: axum::http::Uri) -> Response {
     match rel_path {
         "" | "index.html" => (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-            EMBED_INDEX_HTML.as_bytes().to_vec(),
+            [
+                (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
+            ],
+            inject_version_into_html(EMBED_INDEX_HTML).into_bytes(),
         )
             .into_response(),
         "css/style.css" => (
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, "text/css; charset=utf-8"),
-                (header::CACHE_CONTROL, "public, max-age=3600"),
+                (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
             ],
             EMBED_STYLE_CSS.as_bytes().to_vec(),
         )
@@ -2445,23 +2470,29 @@ async fn serve_embedded_or_disk(uri: axum::http::Uri) -> Response {
                     header::CONTENT_TYPE,
                     "application/javascript; charset=utf-8",
                 ),
-                (header::CACHE_CONTROL, "public, max-age=3600"),
+                (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
             ],
             EMBED_APP_JS.as_bytes().to_vec(),
         )
             .into_response(),
         "manifest.json" => (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+            [
+                (header::CONTENT_TYPE, "application/json; charset=utf-8"),
+                (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
+            ],
             EMBED_MANIFEST_JSON.as_bytes().to_vec(),
         )
             .into_response(),
         "sw.js" => (
             StatusCode::OK,
-            [(
-                header::CONTENT_TYPE,
-                "application/javascript; charset=utf-8",
-            )],
+            [
+                (
+                    header::CONTENT_TYPE,
+                    "application/javascript; charset=utf-8",
+                ),
+                (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
+            ],
             EMBED_SW_JS.as_bytes().to_vec(),
         )
             .into_response(),
@@ -2624,5 +2655,13 @@ mod tests {
         assert_eq!(compare_semver("1.3.0", "1.2.2"), 1);
         assert_eq!(compare_semver("1.2.2", "1.2.2"), 0);
         assert_eq!(compare_semver("1.1.10", "1.2.0"), -1);
+    }
+
+    #[test]
+    fn test_inject_version_into_html() {
+        let raw = r#"<link rel="stylesheet" href="css/style.css?v=1.1.3"><script src="js/app.js?v=1.1.10"></script>"#;
+        let injected = inject_version_into_html(raw);
+        assert!(injected.contains(&format!("css/style.css?v={}", APP_VERSION)));
+        assert!(injected.contains(&format!("js/app.js?v={}", APP_VERSION)));
     }
 }

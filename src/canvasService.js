@@ -222,10 +222,6 @@ class CanvasService {
         const parsed = JSON.parse(raw);
         if (parsed) {
           if (parsed.profile) this.cache.profile = parsed.profile;
-          if (Array.isArray(parsed.courses)) {
-            this.cache.courses = parsed.courses;
-            this.cache.coursesTime = parsed.coursesTime || 0;
-          }
           if (parsed.submittedOverrides && typeof parsed.submittedOverrides === 'object') {
             const maxAgeMs = 180 * 24 * 60 * 60 * 1000;
             const now = Date.now();
@@ -235,8 +231,16 @@ class CanvasService {
               }
             }
           }
-          // スキーマバージョンが一致する場合のみ詳細キャッシュを復元（ロック情報・URL正規化の整合性保証）
-          if (parsed.schemaVersion === 2) {
+          let currentAppVer = '';
+          try {
+            currentAppVer = require('../package.json').version || '';
+          } catch (_) {}
+          // スキーマバージョンおよびアプリバージョンが一致する場合のみ詳細キャッシュを復元（アップデート直後の反映保証）
+          if (parsed.schemaVersion === 2 && (!currentAppVer || parsed.appVersion === currentAppVer)) {
+            if (Array.isArray(parsed.courses)) {
+              this.cache.courses = parsed.courses;
+              this.cache.coursesTime = parsed.coursesTime || 0;
+            }
             if (Array.isArray(parsed.allAssignments)) {
               this.cache.allAssignments = parsed.allAssignments;
               this.cache.allAssignmentsTime = parsed.allAssignmentsTime || 0;
@@ -264,6 +268,10 @@ class CanvasService {
     if (this._saveCacheTimer) clearTimeout(this._saveCacheTimer);
     this._saveCacheTimer = setTimeout(() => {
       try {
+        let currentAppVer = '';
+        try {
+          currentAppVer = require('../package.json').version || '';
+        } catch (_) {}
         const assignmentsObj = {};
         for (const [k, v] of this.cache.assignments.entries()) {
           assignmentsObj[k] = v;
@@ -280,6 +288,7 @@ class CanvasService {
         }
         const data = {
           schemaVersion: 2,
+          appVersion: currentAppVer,
           profile: this.cache.profile,
           courses: this.cache.courses,
           coursesTime: this.cache.coursesTime,

@@ -511,6 +511,33 @@ if (!gotTheLock) {
     }
 
     if (pendingAsarUpdate && fs.existsSync(pendingAsarUpdate.pendingFile)) {
+      const oldTarget = `${pendingAsarUpdate.targetAsar}.old`;
+      try {
+        if (ofs.existsSync(oldTarget)) ofs.unlinkSync(oldTarget);
+      } catch (_) {}
+
+      // 1. Windows NTFS 自己リネーム方式による即時アトミック置換
+      try {
+        ofs.renameSync(pendingAsarUpdate.targetAsar, oldTarget);
+        ofs.copyFileSync(pendingAsarUpdate.pendingFile, pendingAsarUpdate.targetAsar);
+        try { ofs.unlinkSync(pendingAsarUpdate.pendingFile); } catch (_) {}
+        const launched = spawn(pendingAsarUpdate.exePath, [], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: false
+        });
+        launched.unref();
+        app.exit(0);
+        return;
+      } catch (_) {
+        try {
+          if (!ofs.existsSync(pendingAsarUpdate.targetAsar) && ofs.existsSync(oldTarget)) {
+            ofs.renameSync(oldTarget, pendingAsarUpdate.targetAsar);
+          }
+        } catch (__) {}
+      }
+
+      // 2. フォールバック：ロック解除待機付き更新バッチ
       const updateDir = path.dirname(pendingAsarUpdate.pendingFile);
       const batPath = path.join(updateDir, 'apply-update.bat');
       const escapedPending = pendingAsarUpdate.pendingFile.replace(/'/g, "''");
@@ -526,15 +553,22 @@ chcp 65001 >nul\r
 ping -n 2 127.0.0.1 >nul\r
 ${unblockCmd}set /a retries=0\r
 :retry\r
+del /f /q "${oldTarget}" >nul 2>&1\r
+move /y "${pendingAsarUpdate.targetAsar}" "${oldTarget}" >nul 2>&1\r
 copy /y "${pendingAsarUpdate.pendingFile}" "${pendingAsarUpdate.targetAsar}" >nul 2>&1\r
-if not errorlevel 1 goto launch\r
+if not errorlevel 1 goto success\r
 set /a retries+=1\r
-if %retries% geq 10 goto launch\r
+if %retries% geq 30 goto restore\r
 ping -n 2 127.0.0.1 >nul\r
 goto retry\r
+:restore\r
+if not exist "${pendingAsarUpdate.targetAsar}" move /y "${oldTarget}" "${pendingAsarUpdate.targetAsar}" >nul 2>&1\r
+goto launch\r
+:success\r
+del /f /q "${pendingAsarUpdate.pendingFile}" >nul 2>&1\r
+del /f /q "${oldTarget}" >nul 2>&1\r
 :launch\r
 ${unblockTargetCmd}start "" "${pendingAsarUpdate.exePath}"\r
-del "${pendingAsarUpdate.pendingFile}" >nul 2>&1\r
 (goto) 2>nul & del "%~f0"\r
 `;
       try {
